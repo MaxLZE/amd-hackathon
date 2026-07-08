@@ -35,9 +35,13 @@ function renderHeader() {
   setBadge($("#envBadge"), env.ready ? "Env ready" : "Env missing", env.ready ? "ok" : "bad");
   setBadge($("#modelBadge"), `${env.model_count || 0} models`, env.model_count ? "ok" : "warn");
   setBadge($("#localBadge"), env.local_model_configured ? "Local ready" : "Local off", env.local_model_configured ? "ok" : "neutral");
-  $("#statusLine").textContent = env.ready
-    ? "Backend chooses runtime, routing, and token caps automatically"
-    : "Set FIREWORKS_API_KEY, FIREWORKS_BASE_URL, and ALLOWED_MODELS locally";
+  if (env.ready) {
+    $("#statusLine").textContent = "Backend chooses runtime, routing, and token caps automatically";
+  } else if (!env.openai_package_available && !env.local_model_configured) {
+    $("#statusLine").textContent = "Install the Python openai package or configure LOCAL_MODEL_COMMAND";
+  } else {
+    $("#statusLine").textContent = "Set FIREWORKS_API_KEY, FIREWORKS_BASE_URL, and ALLOWED_MODELS locally";
+  }
   $("#sendBtn").disabled = !env.ready || isRunning();
 }
 
@@ -176,14 +180,34 @@ function renderRun() {
   }
 
   if (run.status === "succeeded") {
-    updateAssistantMessage("Done.", meta, run.results || []);
+    const results = run.results || [];
+    const nonEmpty = results.filter((result) => (result.answer || "").trim());
+    if (nonEmpty.length === 1 && results.length === 1) {
+      updateAssistantMessage(nonEmpty[0].answer.trim(), meta);
+    } else {
+      updateAssistantMessage(`Returned ${nonEmpty.length} answer(s).`, meta, results);
+    }
   } else if (run.status === "cancelled") {
     updateAssistantMessage("Stopped.", meta);
   } else {
     const error = run.error || "Run failed.";
-    const details = validation.errors && validation.errors.length ? `\n${validation.errors.join("\n")}` : "";
+    const details = failureDetails(run, validation);
     updateAssistantMessage(`${error}${details}`, meta, run.results || []);
   }
+}
+
+function failureDetails(run, validation) {
+  const lines = [
+    ...(validation.errors || []),
+    ...(validation.warnings || []),
+  ];
+  const stderrLines = (run.stderr || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-4);
+  lines.push(...stderrLines);
+  return lines.length ? `\n${lines.join("\n")}` : "";
 }
 
 function titleCase(value) {
