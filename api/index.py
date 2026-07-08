@@ -7,9 +7,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import mimetypes
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -21,6 +22,7 @@ from workbench_server import auto_runtime_config, env_status, prompt_to_tasks, r
 
 
 TMP_DIR = Path(tempfile.gettempdir()) / "frugal-router-vercel"
+WEB_DIR = ROOT / "web"
 
 
 def _json_response(handler: BaseHTTPRequestHandler, payload: dict, status: int = 200) -> None:
@@ -36,6 +38,25 @@ def _read_json(handler: BaseHTTPRequestHandler) -> dict:
     length = int(handler.headers.get("Content-Length", "0"))
     raw = handler.rfile.read(length).decode("utf-8") if length else "{}"
     return json.loads(raw or "{}")
+
+
+def _static_response(handler: BaseHTTPRequestHandler, request_path: str) -> None:
+    if request_path in {"", "/"}:
+        relative = "index.html"
+    else:
+        relative = unquote(request_path.lstrip("/"))
+        if relative.startswith("web/"):
+            relative = relative[4:]
+    path = (WEB_DIR / relative).resolve()
+    if not path.is_relative_to(WEB_DIR.resolve()) or not path.exists() or path.is_dir():
+        path = WEB_DIR / "index.html"
+    content = path.read_bytes()
+    content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    handler.send_response(200)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(content)))
+    handler.end_headers()
+    handler.wfile.write(content)
 
 
 def _terminal_state(
@@ -163,8 +184,10 @@ class handler(BaseHTTPRequestHandler):
             _json_response(self, {"tasksText": text, "tasks": tasks, "validation": report})
         elif path == "/api/results":
             _json_response(self, {"results": [], "errors": []})
-        else:
+        elif path.startswith("/api/"):
             _json_response(self, {"error": "not found"}, 404)
+        else:
+            _static_response(self, path)
 
     def do_POST(self) -> None:  # noqa: N802 - Vercel/http.server API
         try:
