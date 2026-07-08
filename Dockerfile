@@ -11,6 +11,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-image.txt .
+# llama.cpp defaults to -march=native, which bakes the BUILD machine's CPU
+# instructions into the wheel and SIGILLs (exit 132) on any host missing
+# them (e.g. CI runners have AVX-512, most other machines do not). Cap the
+# build at AVX2 — the portable baseline for any cloud VM since ~2013.
+ENV CMAKE_ARGS="-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON"
 RUN pip install --no-cache-dir --prefix=/install -r requirements-image.txt
 
 # Bundled local model: answers for easy categories cost zero Fireworks tokens.
