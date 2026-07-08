@@ -53,7 +53,28 @@ class LocalEngine:
             f"local model loaded in {time.monotonic() - started:.1f}s: {model_path}",
             file=sys.stderr,
         )
-        return cls(llm)
+        engine = cls(llm)
+        engine._calibrate()
+        return engine
+
+    def _calibrate(self) -> None:
+        """Measure real decode speed with a tiny generation so the first
+        budget decision is honest — the default estimate assumes a fast CPU
+        and a throttled/slow host could otherwise start a generation that
+        blows the runtime budget before the estimate self-corrects."""
+        if os.environ.get("LOCAL_DECODE_TPS"):
+            return  # explicit override wins
+        try:
+            started = time.monotonic()
+            resp = self._generate_sync("Say OK.", 8)
+            elapsed = max(time.monotonic() - started, 0.01)
+            tokens = (resp.get("usage") or {}).get("completion_tokens", 0)
+            if tokens:
+                # 20% safety margin on the observed speed
+                self._decode_tps = max(0.1, (tokens / elapsed) * 0.8)
+                print(f"local decode calibrated: {tokens / elapsed:.2f} tok/s", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 - keep the default estimate
+            print(f"local calibration failed: {exc!r}", file=sys.stderr)
 
     def estimate_seconds(self, content: str, max_tokens: int) -> float:
         prompt_tokens = max(1, len(content) // 3)
@@ -80,7 +101,7 @@ class LocalEngine:
             completion = (resp.get("usage") or {}).get("completion_tokens", 0)
             if completion:
                 observed = completion / elapsed
-                self._decode_tps = max(0.5, 0.7 * self._decode_tps + 0.3 * observed)
+                self._decode_tps = max(0.1, 0.7 * self._decode_tps + 0.3 * observed)
             choice = resp["choices"][0]
             text = (choice.get("message") or {}).get("content") or ""
             return (text, choice.get("finish_reason") or "stop")
