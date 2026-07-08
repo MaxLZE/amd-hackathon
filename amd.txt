@@ -1,0 +1,177 @@
+AMD Developer Hackathon: Participant
+Submission Guide
+This document covers everything you need to build and submit a competitive entry. Exact
+evaluation inputs are intentionally omitted: your agent must be genuinely capable, not
+hardcoded to specific answers.
+
+Track 1: General-Purpose AI Agent
+What you are building
+An AI agent that handles a wide variety of natural language tasks across multiple capability
+domains, using Fireworks AI models as efficiently as possible.
+
+Capability categories
+Your agent will be evaluated across all eight categories. Build for all of them:
+#
+
+Category
+
+What it covers
+
+1
+
+Factual knowledge
+
+Explaining concepts,
+definitions, and how things
+work
+
+2
+
+Mathematical reasoning
+
+Multi-step arithmetic,
+percentages, word problems,
+projections
+
+3
+
+Sentiment classification
+
+Labelling sentiment and
+justifying the classification
+
+4
+
+Text summarisation
+
+Condensing passages to a
+specific format or length
+constraint
+
+5
+
+Named entity recognition
+
+Extracting and labelling
+entities (person, org, location,
+date)
+
+#
+
+Category
+
+What it covers
+
+6
+
+Code debugging
+
+Identifying bugs in code
+snippets and providing
+corrected implementations
+
+7
+
+Logical / deductive
+reasoning
+
+Constraint-based puzzles
+where all conditions must be
+satisfied
+
+8
+
+Code generation
+
+Writing correct,
+well-structured functions from
+a spec
+
+What to submit
+A Docker image pushed to a public registry (e.g. GitHub Container Registry, Docker Hub).
+Check out the Image Architecture requirement at the bottom of this document
+Your container must:
+1.​ Read tasks from /input/tasks.json on startup
+JSON
+[
+{ "task_id": "t1", "prompt": "Summarise the following text in one sentence: ..."
+},
+{ "task_id": "t2", "prompt": "..." }
+]
+
+2.​ Write results to /output/results.json before exiting
+JSON
+[
+{ "task_id": "t1", "answer": "..." },
+{ "task_id": "t2", "answer": "..." }
+]
+
+Environment variables:
+The harness injects these at runtime. Read them from the environment: do not hardcode values
+or bundle a .env file in your image.
+
+Python
+import os
+api_key
+= os.environ["FIREWORKS_API_KEY"]
+# provided by harness — do not use
+your own
+base_url
+= os.environ["FIREWORKS_BASE_URL"] # route ALL Fireworks calls through
+this URL
+models
+= os.environ["ALLOWED_MODELS"].split(",") # exact model IDs published
+on launch day
+
+For local development you can use a .env file, but your submitted container must read these
+purely from the environment: the harness will inject the real values at evaluation time.
+Variable
+
+Description
+
+FIREWORKS_API_KEY
+
+Provided by the harness — use this key, not
+your own
+
+FIREWORKS_BASE_URL
+
+Base URL for all Fireworks API calls — must
+be used to configure your client
+
+ALLOWED_MODELS
+
+Comma-separated list of permitted Fireworks
+AI model IDs, published on launch day
+
+Important: All API calls must go through FIREWORKS_BASE_URL. Calls that
+bypass this URL will not be recorded and the submission will score zero tokens. Do
+not hardcode model IDs: read from ALLOWED_MODELS at runtime.
+
+Rules
+-​
+-​
+-​
+-​
+-​
+-​
+-​
+-​
+
+Exit code 0 on success, non-zero on failure
+Maximum runtime: 10 minutes
+Only models in ALLOWED_MODELS are permitted, calls to other models invalidate the
+submission
+/output/results.json must be valid JSON, malformed output scores zero
+Local models and tokens used locally count as zero for the final score; all inference
+must go through Fireworks AI via FIREWORKS_BASE_URL
+Do not hardcode or cache answers; evaluation uses unseen prompt variants
+Image compressed size must not exceed 10GB — larger images are rejected before
+pulling
+Submissions are rate-limited to 10 per hour per team
+
+Scoring
+1.​ Accuracy gate: LLM-Judge evaluates each answer against the expected intent.
+Submissions below the accuracy threshold are excluded from the leaderboard.
+2.​ Token efficiency: submissions that pass the accuracy gate are ranked ascending by
+total tokens recorded by the judging proxy. Fewer tokens = higher rank.
