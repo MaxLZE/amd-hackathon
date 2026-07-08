@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Frugal Router</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">FR</span>
+          <div>
+            <h1>Frugal Router</h1>
+            <div id="statusLine" class="status-line">Checking local runtime</div>
+          </div>
+        </div>
+        <div class="badges">
+          <span id="envBadge" class="badge neutral">Env</span>
+          <span id="modelBadge" class="badge neutral">Models</span>
+          <span id="localBadge" class="badge neutral">Local</span>
+        </div>
+      </header>
+
+      <main id="transcript" class="transcript" aria-live="polite">
+        <section class="empty-state">
+          <h2>Ready for a prompt</h2>
+          <p>Paste one task prompt or a Track 1 tasks JSON array.</p>
+        </section>
+      </main>
+
+      <footer class="composer-wrap">
+        <form id="promptForm" class="composer">
+          <textarea id="promptInput" rows="1" placeholder="Ask Frugal Router..." aria-label="Prompt"></textarea>
+          <button id="stopBtn" class="round-button stop" type="button" aria-label="Stop run" disabled>■</button>
+          <button id="sendBtn" class="round-button send" type="submit" aria-label="Run prompt">↑</button>
+        </form>
+      </footer>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
