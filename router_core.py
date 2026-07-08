@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import re
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -229,9 +230,23 @@ def resolve_models(allowed: list[str], config: RuntimeConfig | None = None) -> d
             resolved[tier] = override
             continue
         model = next((found for pref in prefs if (found := find(pref))), None)
-        resolved[tier] = model or allowed[0]
+        if model is None and allowed:
+            print(
+                f"warning: no tier preference matched ALLOWED_MODELS for tier '{tier}'; "
+                f"falling back to {allowed[0]} — update DEFAULT_TIER_PREFERENCES with the launch-day model list",
+                file=sys.stderr,
+            )
+        resolved[tier] = model or (allowed[0] if allowed else "")
     return resolved
 
 
 def clean_answer(text: str) -> str:
-    return THINK_BLOCK_RE.sub("", text or "").strip()
+    text = THINK_BLOCK_RE.sub("", text or "")
+    # Salvage answers from reasoning output that was cut mid-stream: keep
+    # whatever follows a closing tag, and never emit a bare "<think>" tag.
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    if "<think>" in text:
+        head, _, tail = text.partition("<think>")
+        text = head.strip() or tail
+    return text.strip()

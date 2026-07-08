@@ -1,20 +1,22 @@
 """Frugal Router — token-minimal general-purpose agent for the Fireworks track.
 
 Reads /input/tasks.json, classifies each task locally (zero API tokens),
-routes it to the cheapest suitable allowed model with a terse category
-prompt, and writes /output/results.json. Optimised for the scoring rule:
-pass the accuracy gate, then rank ascending by total tokens.
+answers easy categories with a bundled local model when possible (zero
+Fireworks tokens), and routes the rest to the cheapest suitable allowed
+model with a terse category prompt. Writes /output/results.json.
+Optimised for the scoring rule: pass the accuracy gate, then rank
+ascending by total Fireworks tokens.
 """
 
 import asyncio
 import json
 import os
 import random
-import shlex
 import sys
 import time
 from typing import Any
 
+from local_engine import LocalEngine
 from router_core import clean_answer, classify, load_runtime_config, resolve_models
 
 # ---------------------------------------------------------------------------
@@ -34,23 +36,56 @@ PER_CALL_TIMEOUT = CONFIG.per_call_timeout
 MAX_ATTEMPTS = CONFIG.max_attempts
 
 CATEGORIES = CONFIG.categories
-LOCAL_MODEL_COMMAND = os.environ.get("LOCAL_MODEL_COMMAND", "").strip()
-LOCAL_MODEL_TIMEOUT = float(os.environ.get("LOCAL_MODEL_TIMEOUT", "8"))
+LOCAL_MODEL_PATH = os.environ.get("LOCAL_MODEL_PATH", "").strip()
 LOCAL_MODEL_CATEGORIES = {
     c.strip()
     for c in os.environ.get("LOCAL_MODEL_CATEGORIES", "factual,sentiment,summary,ner").split(",")
     if c.strip()
 }
+# Time kept free for Fireworks fallbacks when deciding whether a local
+# generation still fits in the budget.
+FIREWORKS_RESERVE_SECONDS = float(os.environ.get("FIREWORKS_RESERVE_SECONDS", "60"))
 
 
 # ---------------------------------------------------------------------------
-# Async workers
+# Model pool
 # ---------------------------------------------------------------------------
+
+class ModelPool:
+    """Tier→model mapping over ALLOWED_MODELS; models that 404 get dropped."""
+
+    def __init__(self, allowed: list[str]):
+        self.allowed = list(allowed)
+        self.tiers = resolve_models(self.allowed, CONFIG)
+
+    def model_for(self, tier: str) -> str:
+        return self.tiers.get(tier) or self.fallback()
+
+    def fallback(self) -> str:
+        return self.tiers.get("easy") or self.allowed[0]
+
+    def disqualify(self, model: str) -> bool:
+        """Drop a model that the API rejected; keep at least one in the pool."""
+        if model not in self.allowed or len(self.allowed) <= 1:
+            return False
+        self.allowed.remove(model)
+        self.tiers = resolve_models(self.allowed, CONFIG)
+        print(f"model disqualified: {model}; tiers now {self.tiers}", file=sys.stderr)
+        return True
+
+
+def is_model_error(exc: Exception) -> bool:
+    if getattr(exc, "status_code", None) == 404:
+        return True
+    text = str(exc).lower()
+    return "model_not_found" in text or ("model" in text and ("not found" in text or "does not exist" in text))
+
 
 class Stats:
     def __init__(self):
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        self.local_answers = 0
         self.by_category: dict[str, int] = {}
 
     def add(self, category: str, usage) -> None:
@@ -63,83 +98,57 @@ class Stats:
         self.by_category[category] = self.by_category.get(category, 0) + pt + ct
 
 
-async def try_local_answer(task_id: str, prompt: str, category: str, spec: dict, deadline: float) -> str | None:
-    if not LOCAL_MODEL_COMMAND or category not in LOCAL_MODEL_CATEGORIES:
-        return None
-    if deadline - time.monotonic() < 3:
-        return None
-
-    payload = {
-        "task_id": task_id,
-        "prompt": prompt,
-        "category": category,
-        "instruction": spec["instruction"],
-    }
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *shlex.split(LOCAL_MODEL_COMMAND),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(json.dumps(payload).encode("utf-8")),
-            timeout=min(LOCAL_MODEL_TIMEOUT, max(1, deadline - time.monotonic())),
-        )
-    except Exception as exc:  # noqa: BLE001 - local model is an optional zero-token path
-        print(f"[{task_id}] local model failed: {exc!r}", file=sys.stderr)
-        return None
-
-    if proc.returncode != 0:
-        detail = stderr.decode("utf-8", errors="replace").strip()
-        print(f"[{task_id}] local model exited {proc.returncode}: {detail}", file=sys.stderr)
-        return None
-
-    text = stdout.decode("utf-8", errors="replace").strip()
-    if text.startswith("{"):
-        try:
-            parsed = json.loads(text)
-            text = parsed.get("answer", "") if isinstance(parsed, dict) else text
-        except json.JSONDecodeError:
-            pass
-    answer = clean_answer(text)
-    if answer:
-        print(f"[{task_id}] answered by local model", file=sys.stderr)
-    return answer or None
-
+# ---------------------------------------------------------------------------
+# Async workers
+# ---------------------------------------------------------------------------
 
 async def answer_task(
     client: Any,
     sem: asyncio.Semaphore,
+    engine: LocalEngine | None,
     task: dict,
-    models: dict[str, str],
-    fallback_model: str,
+    pool: ModelPool | None,
     deadline: float,
     stats: Stats,
 ) -> tuple[str, str]:
-    task_id = task.get("task_id", "")
-    prompt = task.get("prompt", "")
+    task_id = task["task_id"]
+    prompt = task["prompt"]
     category = classify(prompt)
-    spec = CATEGORIES[category]
-    model = models[spec["tier"]]
+    spec = CATEGORIES.get(category) or CATEGORIES["factual"]
     content = f"{prompt}\n\n{spec['instruction']}"
     max_tokens = spec["max_tokens"]
+    best = ""  # best answer seen so far — never return "" if we paid for text
+
+    # Local-first path: zero Fireworks tokens. The engine skips itself when
+    # the remaining time budget (minus the Fireworks reserve) is too small.
+    if engine is not None and category in LOCAL_MODEL_CATEGORIES:
+        reserve = FIREWORKS_RESERVE_SECONDS if client is not None else 5.0
+        local = await engine.generate(content, max_tokens, deadline - reserve)
+        if local is not None:
+            text, finish = local
+            answer = clean_answer(text)
+            if answer and finish == "stop":
+                stats.local_answers += 1
+                print(f"[{task_id}] answered locally ({category})", file=sys.stderr)
+                return task_id, answer
+            best = answer
+            if answer:
+                print(f"[{task_id}] local answer suspect (finish={finish}); falling back", file=sys.stderr)
+
+    if client is None or pool is None:
+        if not best:
+            print(f"[{task_id}] no Fireworks fallback configured", file=sys.stderr)
+        return task_id, best
 
     async with sem:
-        local_answer = await try_local_answer(task_id, prompt, category, spec, deadline)
-        if local_answer:
-            return task_id, local_answer
-        if client is None:
-            print(f"[{task_id}] no Fireworks fallback configured", file=sys.stderr)
-            return task_id, ""
-
         for attempt in range(1, MAX_ATTEMPTS + 1):
             remaining = deadline - time.monotonic()
             if remaining < 5:
-                return task_id, ""
+                return task_id, best
+            model = pool.model_for(spec["tier"])
             # Last attempt swaps to the fallback model in case the primary
             # endpoint is the thing failing.
-            use_model = fallback_model if (attempt == MAX_ATTEMPTS and fallback_model != model) else model
+            use_model = pool.fallback() if (attempt == MAX_ATTEMPTS and pool.fallback() != model) else model
             try:
                 resp = await asyncio.wait_for(
                     client.chat.completions.create(
@@ -153,8 +162,11 @@ async def answer_task(
                 stats.add(category, getattr(resp, "usage", None))
                 choice = resp.choices[0]
                 text = clean_answer(choice.message.content)
+                if len(text) > len(best):
+                    best = text
                 # Truncated answers read as wrong to the judge — one retry
-                # with a doubled cap if time allows.
+                # with a doubled cap if time allows; the truncated text is
+                # kept as `best` in case the retry fails too.
                 if choice.finish_reason == "length" and max_tokens < 1600 and deadline - time.monotonic() > 30:
                     max_tokens *= 2
                     continue
@@ -162,16 +174,39 @@ async def answer_task(
                     return task_id, text
             except Exception as exc:  # noqa: BLE001 - retry on any transport/API error
                 print(f"[{task_id}] attempt {attempt} failed: {exc!r}", file=sys.stderr)
+                # A rejected model will fail every retry identically — drop it
+                # from the pool and retry immediately with the replacement.
+                if is_model_error(exc) and pool.disqualify(use_model):
+                    continue
             await asyncio.sleep(min(2**attempt + random.random(), 8))
-    return task_id, ""
+    return task_id, best
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+def normalize_tasks(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        raise ValueError("tasks.json must be a JSON array")
+    tasks: list[dict[str, str]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            print(f"skipping task {index}: not an object", file=sys.stderr)
+            continue
+        task_id = item.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            print(f"skipping task {index}: missing task_id", file=sys.stderr)
+            continue
+        prompt = item.get("prompt")
+        tasks.append({"task_id": task_id, "prompt": prompt if isinstance(prompt, str) else ""})
+    return tasks
+
+
 def write_results(results: dict[str, str], task_ids: list[str]) -> None:
-    payload = [{"task_id": tid, "answer": results.get(tid, "")} for tid in task_ids]
+    seen: set[str] = set()
+    ordered = [tid for tid in task_ids if not (tid in seen or seen.add(tid))]
+    payload = [{"task_id": tid, "answer": results.get(tid, "")} for tid in ordered]
     os.makedirs(os.path.dirname(RESULTS_FILE) or ".", exist_ok=True)
     tmp = RESULTS_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -183,45 +218,56 @@ async def main() -> int:
     start = time.monotonic()
     deadline = start + MAX_RUNTIME_SECONDS
 
-    with open(TASKS_FILE, encoding="utf-8") as f:
-        tasks = json.load(f)
-    task_ids = [t.get("task_id", "") for t in tasks]
+    try:
+        with open(TASKS_FILE, encoding="utf-8") as f:
+            tasks = normalize_tasks(json.load(f))
+    except Exception as exc:  # noqa: BLE001 - unreadable input is catastrophic
+        print(f"failed to read {TASKS_FILE}: {exc!r}", file=sys.stderr)
+        write_results({}, [])
+        return 1
+    task_ids = [t["task_id"] for t in tasks]
 
     api_key = os.environ.get("FIREWORKS_API_KEY", "")
     base_url = os.environ.get("FIREWORKS_BASE_URL", "")
     allowed = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
     fireworks_ready = bool(api_key and base_url and allowed)
-    if not fireworks_ready and not LOCAL_MODEL_COMMAND:
-        print("Fireworks env vars are missing and LOCAL_MODEL_COMMAND is not configured", file=sys.stderr)
-        write_results({}, task_ids)
-        return 1
-    if not allowed and not LOCAL_MODEL_COMMAND:
-        print("ALLOWED_MODELS is empty", file=sys.stderr)
-        write_results({}, task_ids)
-        return 1
 
-    model_pool = allowed or ["local-only"]
-    models = resolve_models(model_pool, CONFIG)
-    fallback_model = model_pool[0]
-    print(f"models per tier: {models}", file=sys.stderr)
+    engine = LocalEngine.create(LOCAL_MODEL_PATH)
+
+    if not fireworks_ready and engine is None:
+        print("no Fireworks configuration and no local model — cannot answer anything", file=sys.stderr)
+        write_results({}, task_ids)
+        return 1
 
     client = None
+    pool = None
     if fireworks_ready:
         try:
             from openai import AsyncOpenAI
         except ModuleNotFoundError:
             print("Python package 'openai' is not installed; run python3 -m pip install -r requirements.txt", file=sys.stderr)
-            write_results({}, task_ids)
-            return 1
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+            if engine is None:
+                write_results({}, task_ids)
+                return 1
+        else:
+            client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+            pool = ModelPool(allowed)
+            print(f"models per tier: {pool.tiers}", file=sys.stderr)
+
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
     stats = Stats()
 
     results: dict[str, str] = {}
     try:
-        coros = [answer_task(client, sem, t, models, fallback_model, deadline, stats) for t in tasks]
-        for tid, answer in await asyncio.gather(*coros):
-            results[tid] = answer
+        coros = [answer_task(client, sem, engine, t, pool, deadline, stats) for t in tasks]
+        outcomes = await asyncio.gather(*coros, return_exceptions=True)
+        for task, outcome in zip(tasks, outcomes):
+            if isinstance(outcome, BaseException):
+                print(f"[{task['task_id']}] unhandled error: {outcome!r}", file=sys.stderr)
+                results.setdefault(task["task_id"], "")
+            else:
+                tid, answer = outcome
+                results[tid] = answer
     finally:
         write_results(results, task_ids)
         if client is not None:
@@ -235,9 +281,12 @@ async def main() -> int:
         f"by category: {stats.by_category}",
         file=sys.stderr,
     )
+    print(f"local answers: {stats.local_answers}/{len(task_ids)}", file=sys.stderr)
     if empty_task_ids:
+        # Empty answers lose those tasks at the accuracy gate but must NOT
+        # fail the container: a non-zero exit turns a partial score into
+        # RUNTIME_ERROR for the whole submission.
         print(f"empty answers: {empty_task_ids}", file=sys.stderr)
-        return 1
     return 0
 
 

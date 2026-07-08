@@ -1,0 +1,5 @@
+# Dependencies baked into the submission Docker image.
+# Kept separate from requirements.txt because llama-cpp-python needs a C++
+# toolchain that local Windows dev machines usually lack.
+openai>=1.50,<2
+llama-cpp-python>=0.3.8,<0.4

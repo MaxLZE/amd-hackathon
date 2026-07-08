@@ -1,22 +1,26 @@
 # Frugal Router — Track 1 General-Purpose AI Agent
 
 Token-minimal agent for the Fireworks AI track. Strategy: classify each task
-locally with regex (zero API tokens), optionally answer eligible tasks with a
-bundled local model, then fall back to one Fireworks call with a terse
-category-specific prompt and a tight `max_tokens` cap. Scoring passes an
-accuracy gate, then ranks ascending by Fireworks tokens.
+locally with regex (zero API tokens), answer easy categories with the bundled
+llama.cpp local model (zero Fireworks tokens), and fall back to one Fireworks
+call with a terse category-specific prompt and a tight `max_tokens` cap.
+Scoring passes an accuracy gate, then ranks ascending by Fireworks tokens.
 
 ## Routing
 
 | Categories | Model | Why |
 |---|---|---|
-| sentiment, NER, summary, factual | `gemma-4-26b-a4b-it` | cheap MoE, follows brevity instructions |
+| sentiment, NER, summary, factual | bundled local model (Qwen2.5-3B Q4) | zero Fireworks tokens; Fireworks fallback if it fails or time runs short |
 | math, logic | `gemma-4-31b-it` | strongest non-reasoning option |
 | code debug, codegen | `kimi-k2p7-code` | code specialist |
 | (escalation only) | `minimax-m3` | assumed reasoning model; thinking tokens likely count toward the score — verify via benchmark before using |
 
-Models are resolved at runtime against `ALLOWED_MODELS` by suffix/substring
-match; falls back to the first allowed model.
+Fireworks models are resolved at runtime against `ALLOWED_MODELS` by
+suffix/substring match; no match logs a warning and falls back to the first
+allowed model. **The names above are pre-launch guesses — on launch day, put
+the published model IDs into `DEFAULT_TIER_PREFERENCES` in
+[router_core.py](router_core.py).** Models the API rejects (404) are dropped
+from the pool automatically instead of burning retries.
 
 ## Local testing
 
@@ -84,17 +88,19 @@ practical target; a 7B 4-bit model leaves little room for the agent. No Ollama
 or model runtime is preinstalled, so model weights and runtime must be bundled
 inside the Docker image while staying under the 10 GB compressed image limit.
 
-This repo supports an optional local-first hook:
+Implementation: [local_engine.py](local_engine.py) loads a GGUF model once via
+`llama-cpp-python` (in-process, generations serialized for the 2 vCPU budget)
+and answers the `LOCAL_MODEL_CATEGORIES` (default: factual, sentiment,
+summary, ner). Math/logic/code stay on Fireworks for accuracy. Before each
+local generation the engine checks the remaining time budget (keeping
+`FIREWORKS_RESERVE_SECONDS`, default 60, in reserve) and spills over to
+Fireworks when local inference would risk the 10-minute limit. Suspect local
+answers (empty or truncated) also fall back to Fireworks.
 
-```
-LOCAL_MODEL_COMMAND=python3 local_model_runner.py
-LOCAL_MODEL_CATEGORIES=factual,sentiment,summary,ner
-```
-
-The command receives JSON on stdin with `task_id`, `prompt`, `category`, and
-`instruction`, and should return either plain answer text or `{"answer": "..."}`.
-If it fails or returns an empty answer, the agent falls back to Fireworks when
-Fireworks env vars are configured.
+The Dockerfile downloads `Qwen2.5-3B-Instruct-Q4_K_M.gguf` (~1.9 GB) at build
+time and sets `LOCAL_MODEL_PATH=/app/models/local.gguf`. To test locally,
+download any small instruct GGUF, `pip install llama-cpp-python`, and set
+`LOCAL_MODEL_PATH` in `.env`.
 
 ## Build & push (judging VM is linux/amd64)
 

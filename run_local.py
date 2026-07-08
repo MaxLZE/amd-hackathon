@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def require_env() -> list[str]:
-    if os.environ.get("LOCAL_MODEL_COMMAND"):
+    if os.environ.get("LOCAL_MODEL_PATH"):
         return []
     missing = []
     for var in ("FIREWORKS_API_KEY", "FIREWORKS_BASE_URL", "ALLOWED_MODELS"):
@@ -82,7 +82,7 @@ def main() -> int:
         print(f"missing env vars: {', '.join(missing_env)}")
         print("copy .env.example to .env and fill in local values")
         return 1
-    if not os.environ.get("LOCAL_MODEL_COMMAND") and not openai_package_available():
+    if not os.environ.get("LOCAL_MODEL_PATH") and not openai_package_available():
         print("missing Python package: openai")
         print("install dependencies with: python3 -m pip install -r requirements.txt")
         return 1
