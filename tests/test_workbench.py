@@ -119,6 +119,7 @@ class RunManagerTests(unittest.TestCase):
                 "FIREWORKS_API_KEY": "test",
                 "FIREWORKS_BASE_URL": "https://example.test",
                 "ALLOWED_MODELS": "allowed-a",
+                "LOCAL_MODEL_COMMAND": "fake-local",
             }
             with patch.dict(os.environ, env, clear=False):
                 manager.start(json.dumps([{"task_id": "t1", "prompt": "Explain HTTP."}]), config)
@@ -132,6 +133,46 @@ class RunManagerTests(unittest.TestCase):
         self.assertEqual(snapshot["results"][0]["answer"], "ok")
         self.assertEqual(snapshot["token_summary"]["total_tokens"], 3)
         self.assertTrue(snapshot["results_validation"]["valid"])
+
+    def test_empty_answer_marks_run_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_agent = tmp_path / "fake_agent.py"
+            fake_agent.write_text(
+                "\n".join(
+                    [
+                        "import json, os, sys",
+                        "tasks = json.load(open(os.environ['TASKS_FILE'], encoding='utf-8'))",
+                        "payload = [{'task_id': t['task_id'], 'answer': ''} for t in tasks]",
+                        "json.dump(payload, open(os.environ['RESULTS_FILE'], 'w', encoding='utf-8'))",
+                        "print(\"done in 0.1s | tokens: 0 (prompt 0, completion 0) | by category: {}\", file=sys.stderr)",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            manager = RunManager(
+                root=Path(__file__).resolve().parents[1],
+                out_dir=tmp_path,
+                agent_cmd=[sys.executable, str(fake_agent)],
+            )
+            config = RuntimeConfig(max_runtime_seconds=2).public_dict()
+            env = {
+                "FIREWORKS_API_KEY": "test",
+                "FIREWORKS_BASE_URL": "https://example.test",
+                "ALLOWED_MODELS": "allowed-a",
+                "LOCAL_MODEL_COMMAND": "fake-local",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                manager.start(json.dumps([{"task_id": "t1", "prompt": "Explain HTTP."}]), config)
+                deadline = time.time() + 3
+                snapshot = manager.snapshot()
+                while snapshot["status"] in {"running", "cancelling"} and time.time() < deadline:
+                    time.sleep(0.05)
+                    snapshot = manager.snapshot()
+
+        self.assertEqual(snapshot["status"], "failed")
+        self.assertIn("empty answer", snapshot["error"])
+        self.assertEqual(snapshot["results_validation"]["empty_task_ids"], ["t1"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,17 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY agent.py frugal_checks.py router_core.py run_local.py workbench_server.py ./
+COPY tests ./tests
+COPY web ./web
+
+EXPOSE 8765
+
+CMD ["python", "workbench_server.py", "--host", "0.0.0.0", "--port", "8765"]

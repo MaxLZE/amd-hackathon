@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import mimetypes
 import os
@@ -42,6 +43,10 @@ def allowed_models(env: dict[str, str]) -> list[str]:
     return [model.strip() for model in env.get("ALLOWED_MODELS", "").split(",") if model.strip()]
 
 
+def openai_package_available() -> bool:
+    return importlib.util.find_spec("openai") is not None
+
+
 def env_status() -> dict[str, Any]:
     env = read_env()
     models = allowed_models(env)
@@ -53,9 +58,12 @@ def env_status() -> dict[str, Any]:
         "ALLOWED_MODELS": bool(models),
     }
     local_model_configured = bool(env.get("LOCAL_MODEL_COMMAND") or env.get("LOCAL_MODEL_PATH"))
+    openai_installed = openai_package_available()
+    fireworks_configured = all(required.values())
     return {
-        "ready": all(required.values()) or local_model_configured,
+        "ready": local_model_configured or (fireworks_configured and openai_installed),
         "required": required,
+        "openai_package_available": openai_installed,
         "model_count": len(models),
         "allowed_models": models,
         "base_url_configured": bool(env.get("FIREWORKS_BASE_URL")),
@@ -236,6 +244,8 @@ class RunManager:
             local_model_configured = bool(env.get("LOCAL_MODEL_COMMAND") or env.get("LOCAL_MODEL_PATH"))
             if missing and not local_model_configured:
                 raise ValueError(f"missing env vars: {', '.join(missing)}")
+            if not local_model_configured and not openai_package_available():
+                raise ValueError("Python package 'openai' is not installed. Install dependencies with python3 -m pip install -r requirements.txt.")
             env.update(
                 {
                     "TASKS_FILE": str(self.tasks_file),
@@ -320,16 +330,25 @@ class RunManager:
         report = build_run_report(tasks, result_payload, exit_code, stdout, stderr, timed_out)
         with self.lock:
             cancelled = self.cancel_requested and not timed_out
+            result_validation = report["results_validation"]
+            has_empty_answers = bool(result_validation.get("empty_task_ids"))
+            success = exit_code == 0 and not timed_out and result_validation.get("valid") and not has_empty_answers
+            if has_empty_answers:
+                error = f"agent returned empty answer(s): {result_validation['empty_task_ids']}"
+            elif exit_code == 0 and result_validation.get("valid"):
+                error = None
+            else:
+                error = "agent run did not complete successfully"
             self.state.update(
                 {
-                    "status": "cancelled" if cancelled else ("succeeded" if exit_code == 0 and not timed_out else "failed"),
+                    "status": "cancelled" if cancelled else ("succeeded" if success else "failed"),
                     "ended_at": now_ms(),
                     "exit_code": exit_code,
                     "timed_out": timed_out,
                     "results": result_payload if isinstance(result_payload, list) else [],
-                    "results_validation": report["results_validation"],
+                    "results_validation": result_validation,
                     "token_summary": report["token_summary"],
-                    "error": None if exit_code == 0 and not timed_out else "agent run did not complete successfully",
+                    "error": None if cancelled else error,
                 }
             )
             self.process = None

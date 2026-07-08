@@ -13,8 +13,7 @@ import random
 import shlex
 import sys
 import time
-
-from openai import AsyncOpenAI
+from typing import Any
 
 from router_core import clean_answer, classify, load_runtime_config, resolve_models
 
@@ -110,7 +109,7 @@ async def try_local_answer(task_id: str, prompt: str, category: str, spec: dict,
 
 
 async def answer_task(
-    client: AsyncOpenAI | None,
+    client: Any,
     sem: asyncio.Semaphore,
     task: dict,
     models: dict[str, str],
@@ -184,27 +183,37 @@ async def main() -> int:
     start = time.monotonic()
     deadline = start + MAX_RUNTIME_SECONDS
 
+    with open(TASKS_FILE, encoding="utf-8") as f:
+        tasks = json.load(f)
+    task_ids = [t.get("task_id", "") for t in tasks]
+
     api_key = os.environ.get("FIREWORKS_API_KEY", "")
     base_url = os.environ.get("FIREWORKS_BASE_URL", "")
     allowed = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
     fireworks_ready = bool(api_key and base_url and allowed)
     if not fireworks_ready and not LOCAL_MODEL_COMMAND:
         print("Fireworks env vars are missing and LOCAL_MODEL_COMMAND is not configured", file=sys.stderr)
+        write_results({}, task_ids)
         return 1
     if not allowed and not LOCAL_MODEL_COMMAND:
         print("ALLOWED_MODELS is empty", file=sys.stderr)
+        write_results({}, task_ids)
         return 1
-
-    with open(TASKS_FILE, encoding="utf-8") as f:
-        tasks = json.load(f)
-    task_ids = [t.get("task_id", "") for t in tasks]
 
     model_pool = allowed or ["local-only"]
     models = resolve_models(model_pool, CONFIG)
     fallback_model = model_pool[0]
     print(f"models per tier: {models}", file=sys.stderr)
 
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0) if fireworks_ready else None
+    client = None
+    if fireworks_ready:
+        try:
+            from openai import AsyncOpenAI
+        except ModuleNotFoundError:
+            print("Python package 'openai' is not installed; run python3 -m pip install -r requirements.txt", file=sys.stderr)
+            write_results({}, task_ids)
+            return 1
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
     stats = Stats()
 
@@ -219,12 +228,16 @@ async def main() -> int:
             await client.close()
 
     total = stats.prompt_tokens + stats.completion_tokens
+    empty_task_ids = [task_id for task_id in task_ids if not results.get(task_id, "").strip()]
     print(
         f"done in {time.monotonic() - start:.1f}s | tokens: {total} "
         f"(prompt {stats.prompt_tokens}, completion {stats.completion_tokens}) | "
         f"by category: {stats.by_category}",
         file=sys.stderr,
     )
+    if empty_task_ids:
+        print(f"empty answers: {empty_task_ids}", file=sys.stderr)
+        return 1
     return 0
 
 

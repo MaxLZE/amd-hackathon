@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -44,6 +45,10 @@ def require_env() -> list[str]:
     return missing
 
 
+def openai_package_available() -> bool:
+    return importlib.util.find_spec("openai") is not None
+
+
 def print_block(label: str, text: str) -> None:
     if text.strip():
         print(f"\n--- {label} ---")
@@ -76,6 +81,10 @@ def main() -> int:
     if missing_env:
         print(f"missing env vars: {', '.join(missing_env)}")
         print("copy .env.example to .env and fill in local values")
+        return 1
+    if not os.environ.get("LOCAL_MODEL_COMMAND") and not openai_package_available():
+        print("missing Python package: openai")
+        print("install dependencies with: python3 -m pip install -r requirements.txt")
         return 1
 
     task_payload, task_load_errors = load_json(tasks_path)

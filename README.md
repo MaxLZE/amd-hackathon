@@ -45,6 +45,29 @@ python3 workbench_server.py
 
 Open `http://127.0.0.1:8765`.
 
+## Docker workbench
+
+The workbench has its own image so the hackathon submission `Dockerfile` stays
+minimal.
+
+```
+docker-compose up --build -d
+```
+
+Open `http://127.0.0.1:8765`. Runtime secrets are read from `.env`; they are not
+copied into the image. Results and generated workbench config are written to
+`out/`.
+
+If Compose is unavailable, use plain Docker:
+
+```
+docker build -f Dockerfile.workbench -t frugal-router-workbench:local .
+docker run --rm --name frugal-router-workbench --env-file .env -p 8765:8765 -v "$PWD/out:/app/out" frugal-router-workbench:local
+```
+
+On WSL, enable Docker Desktop integration for this distro or make
+`/var/run/docker.sock` available before running these commands.
+
 Benchmark checklist before submitting:
 1. Token totals per category (agent logs them to stderr) — tune `max_tokens` caps.
 2. M3 probe: point one math task at `minimax-m3` (temporarily edit `DEFAULT_TIER_PREFERENCES`)
