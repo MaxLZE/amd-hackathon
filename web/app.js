@@ -130,7 +130,9 @@ async function startRun(prompt) {
     body: JSON.stringify({ prompt }),
   });
   renderRun();
-  startPolling();
+  if (isRunning()) {
+    startPolling();
+  }
 }
 
 async function cancelRun() {
