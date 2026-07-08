@@ -56,9 +56,9 @@ DEFAULT_CATEGORIES: dict[str, dict[str, Any]] = {
 }
 
 DEFAULT_TIER_PREFERENCES: dict[str, list[str]] = {
-    "easy": ["gemma-4-26b-a4b-it", "gemma-4-31b-it", "gemma-4-31b-it-nvfp4", "kimi-k2p7-code"],
-    "reason": ["gemma-4-31b-it", "gemma-4-31b-it-nvfp4", "gemma-4-26b-a4b-it", "kimi-k2p7-code"],
-    "code": ["kimi-k2p7-code", "gemma-4-31b-it", "gemma-4-31b-it-nvfp4", "gemma-4-26b-a4b-it"],
+    "easy": ["glm-5p2", "glm-5p1", "kimi-k2p6", "gpt-oss-120b", "gemma-4-26b-a4b-it", "gemma-4-31b-it"],
+    "reason": ["deepseek-v4-pro", "glm-5p2", "gpt-oss-120b", "gemma-4-31b-it", "gemma-4-31b-it-nvfp4"],
+    "code": ["kimi-k2p6", "kimi-k2p5", "kimi-k2p7-code", "deepseek-v4-pro", "glm-5p2"],
 }
 
 
@@ -250,3 +250,17 @@ def clean_answer(text: str) -> str:
         head, _, tail = text.partition("<think>")
         text = head.strip() or tail
     return text.strip()
+
+
+def parse_allowed_models(value: str) -> list[str]:
+    raw = (value or "").strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(model).strip() for model in parsed if str(model).strip()]
+    return [model.strip().strip("'\"") for model in raw.split(",") if model.strip().strip("'\"")]

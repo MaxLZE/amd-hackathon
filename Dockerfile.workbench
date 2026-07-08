@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY agent.py frugal_checks.py router_core.py run_local.py workbench_server.py ./
+COPY agent.py fireworks_client.py frugal_checks.py local_engine.py router_core.py run_local.py workbench_server.py ./
 COPY tests ./tests
 COPY web ./web
 

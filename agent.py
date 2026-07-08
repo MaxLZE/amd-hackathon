@@ -16,8 +16,9 @@ import sys
 import time
 from typing import Any
 
+from fireworks_client import FireworksClient
 from local_engine import LocalEngine
-from router_core import clean_answer, classify, load_runtime_config, resolve_models
+from router_core import clean_answer, classify, load_runtime_config, parse_allowed_models, resolve_models
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -229,7 +230,7 @@ async def main() -> int:
 
     api_key = os.environ.get("FIREWORKS_API_KEY", "")
     base_url = os.environ.get("FIREWORKS_BASE_URL", "")
-    allowed = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
+    allowed = parse_allowed_models(os.environ.get("ALLOWED_MODELS", ""))
     fireworks_ready = bool(api_key and base_url and allowed)
 
     engine = LocalEngine.create(LOCAL_MODEL_PATH)
@@ -245,14 +246,12 @@ async def main() -> int:
         try:
             from openai import AsyncOpenAI
         except ModuleNotFoundError:
-            print("Python package 'openai' is not installed; run python3 -m pip install -r requirements.txt", file=sys.stderr)
-            if engine is None:
-                write_results({}, task_ids)
-                return 1
+            print("Python package 'openai' is not installed; using stdlib Fireworks client", file=sys.stderr)
+            client = FireworksClient(api_key=api_key, base_url=base_url)
         else:
             client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
-            pool = ModelPool(allowed)
-            print(f"models per tier: {pool.tiers}", file=sys.stderr)
+        pool = ModelPool(allowed)
+        print(f"models per tier: {pool.tiers}", file=sys.stderr)
 
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
     stats = Stats()

@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from frugal_checks import parse_agent_summary, validate_results, validate_tasks
-from router_core import RuntimeConfig, load_runtime_config, resolve_models, save_runtime_config
+from router_core import RuntimeConfig, load_runtime_config, parse_allowed_models, resolve_models, save_runtime_config
 from workbench_server import RunManager, auto_runtime_config, prompt_to_tasks
 
 
@@ -68,6 +68,11 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(loaded.max_runtime_seconds, 120)
         self.assertEqual(resolved["easy"], "allowed-a")
+
+    def test_parse_allowed_models_accepts_json_array(self) -> None:
+        models = parse_allowed_models('["minimax-m3", "kimi-k2p7-code"]')
+
+        self.assertEqual(models, ["minimax-m3", "kimi-k2p7-code"])
 
     def test_prompt_to_tasks_accepts_plain_prompt(self) -> None:
         tasks, report = prompt_to_tasks("Explain how HTTPS works.")

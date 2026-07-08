@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import mimetypes
 import os
@@ -17,7 +16,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from frugal_checks import build_run_report, load_json, parse_tasks_text, validate_tasks
-from router_core import RuntimeConfig, classify, load_dotenv, load_runtime_config, resolve_models, save_runtime_config
+from router_core import RuntimeConfig, classify, load_dotenv, load_runtime_config, parse_allowed_models, resolve_models, save_runtime_config
 
 
 ROOT = Path(__file__).parent
@@ -40,17 +39,13 @@ def read_env() -> dict[str, str]:
 
 
 def allowed_models(env: dict[str, str]) -> list[str]:
-    return [model.strip() for model in env.get("ALLOWED_MODELS", "").split(",") if model.strip()]
-
-
-def openai_package_available() -> bool:
-    return importlib.util.find_spec("openai") is not None
+    return parse_allowed_models(env.get("ALLOWED_MODELS", ""))
 
 
 def env_status() -> dict[str, Any]:
     env = read_env()
     models = allowed_models(env)
-    runtime = load_runtime_config(CONFIG_FILE if CONFIG_FILE.exists() else None, env)
+    runtime = load_runtime_config(None, env)
     resolved = resolve_models(models, runtime) if models else {}
     required = {
         "FIREWORKS_API_KEY": bool(env.get("FIREWORKS_API_KEY")),
@@ -58,12 +53,10 @@ def env_status() -> dict[str, Any]:
         "ALLOWED_MODELS": bool(models),
     }
     local_model_configured = bool(env.get("LOCAL_MODEL_COMMAND") or env.get("LOCAL_MODEL_PATH"))
-    openai_installed = openai_package_available()
     fireworks_configured = all(required.values())
     return {
-        "ready": local_model_configured or (fireworks_configured and openai_installed),
+        "ready": local_model_configured or fireworks_configured,
         "required": required,
-        "openai_package_available": openai_installed,
         "model_count": len(models),
         "allowed_models": models,
         "base_url_configured": bool(env.get("FIREWORKS_BASE_URL")),
@@ -233,6 +226,9 @@ class RunManager:
             if self.process and self.process.poll() is None:
                 raise RuntimeError("a run is already active")
 
+            run_id = now_ms()
+            self.tasks_file = self.out_dir / f"workbench_tasks_{run_id}.json"
+            self.results_file = self.out_dir / f"workbench_results_{run_id}.json"
             self.out_dir.mkdir(parents=True, exist_ok=True)
             self.tasks_file.write_text(json.dumps(tasks, indent=2), encoding="utf-8")
             self.results_file.write_text("[]", encoding="utf-8")
@@ -244,8 +240,6 @@ class RunManager:
             local_model_configured = bool(env.get("LOCAL_MODEL_COMMAND") or env.get("LOCAL_MODEL_PATH"))
             if missing and not local_model_configured:
                 raise ValueError(f"missing env vars: {', '.join(missing)}")
-            if not local_model_configured and not openai_package_available():
-                raise ValueError("Python package 'openai' is not installed. Install dependencies with python3 -m pip install -r requirements.txt.")
             env.update(
                 {
                     "TASKS_FILE": str(self.tasks_file),
@@ -255,7 +249,6 @@ class RunManager:
             )
 
             self.cancel_requested = False
-            run_id = now_ms()
             self.state = self._empty_state()
             self.state.update(
                 {
@@ -395,7 +388,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/run/status":
             json_response(self, MANAGER.snapshot())
         elif parsed.path == "/api/results":
-            payload, errors = load_json(RESULTS_FILE)
+            payload, errors = load_json(MANAGER.results_file)
             json_response(self, {"results": payload or [], "errors": errors})
         elif parsed.path.startswith("/api/"):
             json_response(self, {"error": "not found"}, 404)
@@ -424,6 +417,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             json_response(self, {"error": f"invalid JSON body: {exc.msg}"}, 400)
         except (RuntimeError, ValueError) as exc:
             json_response(self, {"error": str(exc)}, 400)
+        except Exception as exc:  # noqa: BLE001 - keep fetch callers on JSON errors
+            json_response(self, {"error": f"server error: {exc}"}, 500)
 
     def serve_static(self, request_path: str) -> None:
         relative = "index.html" if request_path == "/" else unquote(request_path.lstrip("/"))

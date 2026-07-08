@@ -37,10 +37,8 @@ function renderHeader() {
   setBadge($("#localBadge"), env.local_model_configured ? "Local ready" : "Local off", env.local_model_configured ? "ok" : "neutral");
   if (env.ready) {
     $("#statusLine").textContent = "Backend chooses runtime, routing, and token caps automatically";
-  } else if (!env.openai_package_available && !env.local_model_configured) {
-    $("#statusLine").textContent = "Install the Python openai package or configure LOCAL_MODEL_COMMAND";
   } else {
-    $("#statusLine").textContent = "Set FIREWORKS_API_KEY, FIREWORKS_BASE_URL, and ALLOWED_MODELS locally";
+    $("#statusLine").textContent = "Set Fireworks env vars or configure a local model";
   }
   $("#sendBtn").disabled = !env.ready || isRunning();
 }
