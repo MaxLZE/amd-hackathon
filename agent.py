@@ -1,20 +1,23 @@
 """Frugal Router — token-minimal general-purpose agent for the Fireworks track.
 
 Reads /input/tasks.json, classifies each task locally (zero API tokens),
-routes it to the cheapest suitable allowed model with a terse category
-prompt, and writes /output/results.json. Optimised for the scoring rule:
-pass the accuracy gate, then rank ascending by total tokens.
+answers easy categories with a bundled local model when possible (zero
+Fireworks tokens), and routes the rest to the cheapest suitable allowed
+model with a terse category prompt. Writes /output/results.json.
+Optimised for the scoring rule: pass the accuracy gate, then rank
+ascending by total Fireworks tokens.
 """
 
 import asyncio
 import json
 import os
 import random
-import re
 import sys
 import time
+from typing import Any
 
-from openai import AsyncOpenAI
+from local_engine import LocalEngine
+from router_core import clean_answer, classify, load_runtime_config, resolve_models
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -22,165 +25,67 @@ from openai import AsyncOpenAI
 
 TASKS_FILE = os.environ.get("TASKS_FILE", "/input/tasks.json")
 RESULTS_FILE = os.environ.get("RESULTS_FILE", "/output/results.json")
+CONFIG = load_runtime_config()
 
 # Leave headroom inside the 10-minute harness limit for startup + file I/O.
-MAX_RUNTIME_SECONDS = float(os.environ.get("MAX_RUNTIME_SECONDS", "510"))
-MAX_CONCURRENCY = int(os.environ.get("MAX_CONCURRENCY", "10"))
+MAX_RUNTIME_SECONDS = CONFIG.max_runtime_seconds
+MAX_CONCURRENCY = CONFIG.max_concurrency
 # 30s balances fast failure detection against double-billing: a timed-out
 # request may still complete server-side and its tokens still get recorded.
-PER_CALL_TIMEOUT = float(os.environ.get("PER_CALL_TIMEOUT", "30"))
-MAX_ATTEMPTS = 3
+PER_CALL_TIMEOUT = CONFIG.per_call_timeout
+MAX_ATTEMPTS = CONFIG.max_attempts
 
-# Per-category behaviour. Instructions are appended to the task prompt as a
-# single user message (no system message — some models ignore or re-bill it,
-# and every token counts). max_tokens caps runaway verbosity; if a response
-# is cut off we retry once with double the cap so the judge sees a complete
-# answer.
-CATEGORIES = {
-    "factual": {
-        "instruction": "Answer concisely and accurately in 2-4 sentences.",
-        "max_tokens": 220,
-        "tier": "easy",
-    },
-    "math": {
-        "instruction": "Solve step by step but keep each step brief. End with 'Answer: <result>'.",
-        "max_tokens": 350,
-        "tier": "reason",
-    },
-    "sentiment": {
-        "instruction": "State the sentiment label, then justify it in one sentence.",
-        "max_tokens": 80,
-        "tier": "easy",
-    },
-    "summary": {
-        "instruction": "Follow the requested length and format exactly. Output only the summary.",
-        "max_tokens": 180,
-        "tier": "easy",
-    },
-    "ner": {
-        "instruction": "Extract the entities with their types. Output only the labelled list, nothing else.",
-        "max_tokens": 200,
-        "tier": "easy",
-    },
-    "code_debug": {
-        "instruction": "If the code has a bug, state it in one or two sentences, then give the corrected code. No extra commentary.",
-        "max_tokens": 600,
-        "tier": "code",
-    },
-    "logic": {
-        "instruction": "Reason through the constraints briefly, then clearly state the final answer.",
-        "max_tokens": 450,
-        "tier": "reason",
-    },
-    "codegen": {
-        "instruction": "Output only the code with a minimal docstring. No explanation before or after.",
-        "max_tokens": 600,
-        "tier": "code",
-    },
+CATEGORIES = CONFIG.categories
+LOCAL_MODEL_PATH = os.environ.get("LOCAL_MODEL_PATH", "").strip()
+LOCAL_MODEL_CATEGORIES = {
+    c.strip()
+    for c in os.environ.get("LOCAL_MODEL_CATEGORIES", "factual,sentiment,summary,ner").split(",")
+    if c.strip()
 }
-
-# Preferred model name fragments per tier, best first. Resolved against the
-# runtime ALLOWED_MODELS list (IDs may carry an accounts/.../models/ prefix).
-# minimax-m3 is a reasoning model — its thinking tokens bill as completion
-# tokens, so it is deliberately last everywhere.
-TIER_PREFERENCES = {
-    "easy": ["gemma-4-26b-a4b-it", "gemma-4-31b-it", "gemma-4-31b-it-nvfp4", "kimi-k2p7-code"],
-    "reason": ["gemma-4-31b-it", "gemma-4-31b-it-nvfp4", "gemma-4-26b-a4b-it", "kimi-k2p7-code"],
-    "code": ["kimi-k2p7-code", "gemma-4-31b-it", "gemma-4-31b-it-nvfp4", "gemma-4-26b-a4b-it"],
-}
-
-# ---------------------------------------------------------------------------
-# Zero-token task classifier
-# ---------------------------------------------------------------------------
-
-CODE_SNIPPET_RE = re.compile(
-    r"```|\bdef \w+\(|\bfunction\s+\w*\(|=>\s*{|\breturn\b.*;|#include\s*<|\bpublic\s+(static|class)\b"
-)
-BUG_WORDS_RE = re.compile(r"\b(bug|debug|fix|error|wrong|incorrect|broken|fault|doesn'?t work|fails?)\b")
-CODEGEN_RE = re.compile(
-    r"\b(write|implement|create|build)\b.{0,40}"
-    r"\b(function|method|class|script|program|code|helper|utility|routine|algorithm|api|endpoint)\b"
-)
-MATH_RE = re.compile(
-    r"\b(calculate|compute|how (much|many)|percent|percentage|total cost|average|"
-    r"sum of|profit|interest|discount|per (hour|day|week|month|year)|projection)\b|%"
-)
-LOGIC_RE = re.compile(
-    r"\b(puzzle|riddle|deduce|deduction|constraints?|clues?|exactly one|"
-    r"who (is|has|owns|lives|sits)|seated|seating|arrange|logically|must be true|"
-    r"each (has?|have|owns?)? ?a different|sits? (immediately )?(to the )?(left|right|next)|"
-    r"either end|in a row)\b"
-)
-NER_RE = re.compile(
-    r"\bentit(y|ies)\b|named entity|\bextract\b.{0,80}\b(person|people|organi[sz]ation|location|date)s?\b"
-)
-
-
-def classify(prompt: str) -> str:
-    p = prompt.lower()
-    if "sentiment" in p or re.search(r"\b(positive|negative|neutral)\b.{0,30}\bclassif", p):
-        return "sentiment"
-    if re.search(r"\bsummari[sz]e|\bsummary\b|\bcondense\b|tl;?dr", p):
-        return "summary"
-    if NER_RE.search(p):
-        return "ner"
-    if CODE_SNIPPET_RE.search(prompt):
-        # Explicit codegen phrasing wins even when bug-adjacent words appear
-        # ("write a function that raises an error if ..."); bare code or
-        # bug wording without a spec means debugging.
-        if CODEGEN_RE.search(p):
-            return "codegen"
-        return "code_debug"
-    if CODEGEN_RE.search(p):
-        return "codegen"
-    if LOGIC_RE.search(p):
-        return "logic"
-    numbers = len(re.findall(r"\d[\d,.]*", prompt))
-    if MATH_RE.search(p) or numbers >= 4:
-        return "math"
-    return "factual"
+# Time kept free for Fireworks fallbacks when deciding whether a local
+# generation still fits in the budget.
+FIREWORKS_RESERVE_SECONDS = float(os.environ.get("FIREWORKS_RESERVE_SECONDS", "60"))
 
 
 # ---------------------------------------------------------------------------
-# Model resolution
+# Model pool
 # ---------------------------------------------------------------------------
 
-def resolve_models(allowed: list[str]) -> dict[str, str]:
-    """Map each tier to a concrete allowed model ID."""
+class ModelPool:
+    """Tier→model mapping over ALLOWED_MODELS; models that 404 get dropped."""
 
-    def find(fragment: str) -> str | None:
-        # Exact / suffix match first so 'gemma-4-31b-it' does not grab the
-        # '-nvfp4' variant; substring match as a fallback.
-        for m in allowed:
-            if m == fragment or m.endswith("/" + fragment):
-                return m
-        for m in allowed:
-            if fragment in m:
-                return m
-        return None
+    def __init__(self, allowed: list[str]):
+        self.allowed = list(allowed)
+        self.tiers = resolve_models(self.allowed, CONFIG)
 
-    resolved = {}
-    for tier, prefs in TIER_PREFERENCES.items():
-        model = next((found for p in prefs if (found := find(p))), None)
-        resolved[tier] = model or allowed[0]
-    return resolved
+    def model_for(self, tier: str) -> str:
+        return self.tiers.get(tier) or self.fallback()
 
+    def fallback(self) -> str:
+        return self.tiers.get("easy") or self.allowed[0]
 
-THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
-
-
-def clean_answer(text: str) -> str:
-    return THINK_BLOCK_RE.sub("", text or "").strip()
+    def disqualify(self, model: str) -> bool:
+        """Drop a model that the API rejected; keep at least one in the pool."""
+        if model not in self.allowed or len(self.allowed) <= 1:
+            return False
+        self.allowed.remove(model)
+        self.tiers = resolve_models(self.allowed, CONFIG)
+        print(f"model disqualified: {model}; tiers now {self.tiers}", file=sys.stderr)
+        return True
 
 
-# ---------------------------------------------------------------------------
-# Async workers
-# ---------------------------------------------------------------------------
+def is_model_error(exc: Exception) -> bool:
+    if getattr(exc, "status_code", None) == 404:
+        return True
+    text = str(exc).lower()
+    return "model_not_found" in text or ("model" in text and ("not found" in text or "does not exist" in text))
+
 
 class Stats:
     def __init__(self):
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        self.local_answers = 0
         self.by_category: dict[str, int] = {}
 
     def add(self, category: str, usage) -> None:
@@ -193,31 +98,57 @@ class Stats:
         self.by_category[category] = self.by_category.get(category, 0) + pt + ct
 
 
+# ---------------------------------------------------------------------------
+# Async workers
+# ---------------------------------------------------------------------------
+
 async def answer_task(
-    client: AsyncOpenAI,
+    client: Any,
     sem: asyncio.Semaphore,
+    engine: LocalEngine | None,
     task: dict,
-    models: dict[str, str],
-    fallback_model: str,
+    pool: ModelPool | None,
     deadline: float,
     stats: Stats,
 ) -> tuple[str, str]:
-    task_id = task.get("task_id", "")
-    prompt = task.get("prompt", "")
+    task_id = task["task_id"]
+    prompt = task["prompt"]
     category = classify(prompt)
-    spec = CATEGORIES[category]
-    model = models[spec["tier"]]
+    spec = CATEGORIES.get(category) or CATEGORIES["factual"]
     content = f"{prompt}\n\n{spec['instruction']}"
     max_tokens = spec["max_tokens"]
+    best = ""  # best answer seen so far — never return "" if we paid for text
+
+    # Local-first path: zero Fireworks tokens. The engine skips itself when
+    # the remaining time budget (minus the Fireworks reserve) is too small.
+    if engine is not None and category in LOCAL_MODEL_CATEGORIES:
+        reserve = FIREWORKS_RESERVE_SECONDS if client is not None else 5.0
+        local = await engine.generate(content, max_tokens, deadline - reserve)
+        if local is not None:
+            text, finish = local
+            answer = clean_answer(text)
+            if answer and finish == "stop":
+                stats.local_answers += 1
+                print(f"[{task_id}] answered locally ({category})", file=sys.stderr)
+                return task_id, answer
+            best = answer
+            if answer:
+                print(f"[{task_id}] local answer suspect (finish={finish}); falling back", file=sys.stderr)
+
+    if client is None or pool is None:
+        if not best:
+            print(f"[{task_id}] no Fireworks fallback configured", file=sys.stderr)
+        return task_id, best
 
     async with sem:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             remaining = deadline - time.monotonic()
             if remaining < 5:
-                return task_id, ""
+                return task_id, best
+            model = pool.model_for(spec["tier"])
             # Last attempt swaps to the fallback model in case the primary
             # endpoint is the thing failing.
-            use_model = fallback_model if (attempt == MAX_ATTEMPTS and fallback_model != model) else model
+            use_model = pool.fallback() if (attempt == MAX_ATTEMPTS and pool.fallback() != model) else model
             try:
                 resp = await asyncio.wait_for(
                     client.chat.completions.create(
@@ -231,8 +162,11 @@ async def answer_task(
                 stats.add(category, getattr(resp, "usage", None))
                 choice = resp.choices[0]
                 text = clean_answer(choice.message.content)
+                if len(text) > len(best):
+                    best = text
                 # Truncated answers read as wrong to the judge — one retry
-                # with a doubled cap if time allows.
+                # with a doubled cap if time allows; the truncated text is
+                # kept as `best` in case the retry fails too.
                 if choice.finish_reason == "length" and max_tokens < 1600 and deadline - time.monotonic() > 30:
                     max_tokens *= 2
                     continue
@@ -240,16 +174,39 @@ async def answer_task(
                     return task_id, text
             except Exception as exc:  # noqa: BLE001 - retry on any transport/API error
                 print(f"[{task_id}] attempt {attempt} failed: {exc!r}", file=sys.stderr)
+                # A rejected model will fail every retry identically — drop it
+                # from the pool and retry immediately with the replacement.
+                if is_model_error(exc) and pool.disqualify(use_model):
+                    continue
             await asyncio.sleep(min(2**attempt + random.random(), 8))
-    return task_id, ""
+    return task_id, best
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+def normalize_tasks(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        raise ValueError("tasks.json must be a JSON array")
+    tasks: list[dict[str, str]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            print(f"skipping task {index}: not an object", file=sys.stderr)
+            continue
+        task_id = item.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            print(f"skipping task {index}: missing task_id", file=sys.stderr)
+            continue
+        prompt = item.get("prompt")
+        tasks.append({"task_id": task_id, "prompt": prompt if isinstance(prompt, str) else ""})
+    return tasks
+
+
 def write_results(results: dict[str, str], task_ids: list[str]) -> None:
-    payload = [{"task_id": tid, "answer": results.get(tid, "")} for tid in task_ids]
+    seen: set[str] = set()
+    ordered = [tid for tid in task_ids if not (tid in seen or seen.add(tid))]
+    payload = [{"task_id": tid, "answer": results.get(tid, "")} for tid in ordered]
     os.makedirs(os.path.dirname(RESULTS_FILE) or ".", exist_ok=True)
     tmp = RESULTS_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -261,41 +218,75 @@ async def main() -> int:
     start = time.monotonic()
     deadline = start + MAX_RUNTIME_SECONDS
 
-    api_key = os.environ["FIREWORKS_API_KEY"]
-    base_url = os.environ["FIREWORKS_BASE_URL"]
-    allowed = [m.strip() for m in os.environ["ALLOWED_MODELS"].split(",") if m.strip()]
-    if not allowed:
-        print("ALLOWED_MODELS is empty", file=sys.stderr)
+    try:
+        with open(TASKS_FILE, encoding="utf-8") as f:
+            tasks = normalize_tasks(json.load(f))
+    except Exception as exc:  # noqa: BLE001 - unreadable input is catastrophic
+        print(f"failed to read {TASKS_FILE}: {exc!r}", file=sys.stderr)
+        write_results({}, [])
+        return 1
+    task_ids = [t["task_id"] for t in tasks]
+
+    api_key = os.environ.get("FIREWORKS_API_KEY", "")
+    base_url = os.environ.get("FIREWORKS_BASE_URL", "")
+    allowed = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
+    fireworks_ready = bool(api_key and base_url and allowed)
+
+    engine = LocalEngine.create(LOCAL_MODEL_PATH)
+
+    if not fireworks_ready and engine is None:
+        print("no Fireworks configuration and no local model — cannot answer anything", file=sys.stderr)
+        write_results({}, task_ids)
         return 1
 
-    with open(TASKS_FILE, encoding="utf-8") as f:
-        tasks = json.load(f)
-    task_ids = [t.get("task_id", "") for t in tasks]
+    client = None
+    pool = None
+    if fireworks_ready:
+        try:
+            from openai import AsyncOpenAI
+        except ModuleNotFoundError:
+            print("Python package 'openai' is not installed; run python3 -m pip install -r requirements.txt", file=sys.stderr)
+            if engine is None:
+                write_results({}, task_ids)
+                return 1
+        else:
+            client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+            pool = ModelPool(allowed)
+            print(f"models per tier: {pool.tiers}", file=sys.stderr)
 
-    models = resolve_models(allowed)
-    fallback_model = allowed[0]
-    print(f"models per tier: {models}", file=sys.stderr)
-
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
     stats = Stats()
 
     results: dict[str, str] = {}
     try:
-        coros = [answer_task(client, sem, t, models, fallback_model, deadline, stats) for t in tasks]
-        for tid, answer in await asyncio.gather(*coros):
-            results[tid] = answer
+        coros = [answer_task(client, sem, engine, t, pool, deadline, stats) for t in tasks]
+        outcomes = await asyncio.gather(*coros, return_exceptions=True)
+        for task, outcome in zip(tasks, outcomes):
+            if isinstance(outcome, BaseException):
+                print(f"[{task['task_id']}] unhandled error: {outcome!r}", file=sys.stderr)
+                results.setdefault(task["task_id"], "")
+            else:
+                tid, answer = outcome
+                results[tid] = answer
     finally:
         write_results(results, task_ids)
-        await client.close()
+        if client is not None:
+            await client.close()
 
     total = stats.prompt_tokens + stats.completion_tokens
+    empty_task_ids = [task_id for task_id in task_ids if not results.get(task_id, "").strip()]
     print(
         f"done in {time.monotonic() - start:.1f}s | tokens: {total} "
         f"(prompt {stats.prompt_tokens}, completion {stats.completion_tokens}) | "
         f"by category: {stats.by_category}",
         file=sys.stderr,
     )
+    print(f"local answers: {stats.local_answers}/{len(task_ids)}", file=sys.stderr)
+    if empty_task_ids:
+        # Empty answers lose those tasks at the accuracy gate but must NOT
+        # fail the container: a non-zero exit turns a partial score into
+        # RUNTIME_ERROR for the whole submission.
+        print(f"empty answers: {empty_task_ids}", file=sys.stderr)
     return 0
 
 

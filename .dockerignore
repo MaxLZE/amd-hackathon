@@ -1,0 +1,10 @@
+.git
+.agents
+.codex
+.env
+__pycache__/
+*.pyc
+out/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

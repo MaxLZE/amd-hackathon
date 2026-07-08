@@ -1,0 +1,16 @@
+services:
+  frugal-workbench:
+    build:
+      context: .
+      dockerfile: Dockerfile.workbench
+    image: frugal-router-workbench:local
+    container_name: frugal-router-workbench
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./out:/app/out
+    restart: unless-stopped

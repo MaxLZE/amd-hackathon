@@ -1,89 +1,182 @@
-"""Local test harness for the Frugal Router agent.
+"""Local test harness for the Frugal Router agent."""
 
-Loads .env, runs agent.py against tests/sample_tasks.json, validates the
-output schema, and prints each answer plus the token summary the agent
-logs to stderr. Usage:  python run_local.py [tasks_file]
-"""
+from __future__ import annotations
 
+import argparse
+import importlib.util
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
+from frugal_checks import build_run_report, load_json, validate_tasks
+from router_core import load_dotenv
+
+
 ROOT = Path(__file__).parent
-TASKS = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "tests" / "sample_tasks.json"
-OUT_DIR = ROOT / "out"
-RESULTS = OUT_DIR / "results.json"
+DEFAULT_TASKS = ROOT / "tests" / "sample_tasks.json"
+DEFAULT_OUT_DIR = ROOT / "out"
 
 
-def load_dotenv(path: Path) -> None:
-    if not path.exists():
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run agent.py locally and validate results.")
+    parser.add_argument("tasks_file", nargs="?", help="Legacy positional task file path.")
+    parser.add_argument("--tasks", help="Task JSON file path. Overrides the positional path.")
+    parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR), help="Directory for results.json and reports.")
+    parser.add_argument("--config", help="Optional runtime config JSON file for routing and limits.")
+    parser.add_argument("--timeout", type=float, default=600, help="Subprocess timeout in seconds.")
+    parser.add_argument(
+        "--json-report",
+        nargs="?",
+        const="-",
+        help="Write a structured run report to this path, or stdout when omitted.",
+    )
+    return parser.parse_args()
+
+
+def require_env() -> list[str]:
+    if os.environ.get("LOCAL_MODEL_PATH"):
+        return []
+    missing = []
+    for var in ("FIREWORKS_API_KEY", "FIREWORKS_BASE_URL", "ALLOWED_MODELS"):
+        if var not in os.environ or not os.environ[var].strip():
+            missing.append(var)
+    return missing
+
+
+def openai_package_available() -> bool:
+    return importlib.util.find_spec("openai") is not None
+
+
+def print_block(label: str, text: str) -> None:
+    if text.strip():
+        print(f"\n--- {label} ---")
+        print(text.rstrip())
+
+
+def write_report(report: dict, target: str | None) -> None:
+    if not target:
         return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+    encoded = json.dumps(report, indent=2)
+    if target == "-":
+        print("\n--- json report ---")
+        print(encoded)
+        return
+    path = Path(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(encoded, encoding="utf-8")
+    print(f"report written: {path}")
 
 
 def main() -> int:
+    args = parse_args()
+    tasks_path = Path(args.tasks or args.tasks_file or DEFAULT_TASKS).expanduser()
+    out_dir = Path(args.out_dir).expanduser()
+    results_path = out_dir / "results.json"
+    config_path = Path(args.config).expanduser() if args.config else None
+
     load_dotenv(ROOT / ".env")
-    for var in ("FIREWORKS_API_KEY", "FIREWORKS_BASE_URL", "ALLOWED_MODELS"):
-        if var not in os.environ:
-            print(f"missing {var} — copy .env.example to .env and fill it in")
-            return 1
+    missing_env = require_env()
+    if missing_env:
+        print(f"missing env vars: {', '.join(missing_env)}")
+        print("copy .env.example to .env and fill in local values")
+        return 1
+    if not os.environ.get("LOCAL_MODEL_PATH") and not openai_package_available():
+        print("missing Python package: openai")
+        print("install dependencies with: python3 -m pip install -r requirements.txt")
+        return 1
 
-    OUT_DIR.mkdir(exist_ok=True)
-    env = os.environ | {"TASKS_FILE": str(TASKS), "RESULTS_FILE": str(RESULTS)}
+    task_payload, task_load_errors = load_json(tasks_path)
+    if task_load_errors:
+        for error in task_load_errors:
+            print(f"ERROR {error}")
+        return 1
+    tasks, task_report = validate_tasks(task_payload)
+    if not task_report["valid"]:
+        for error in task_report["errors"]:
+            print(f"ERROR {error}")
+        return 1
 
-    proc = subprocess.run([sys.executable, str(ROOT / "agent.py")], env=env)
-    print(f"\nagent exit code: {proc.returncode}")
-    if proc.returncode != 0:
-        return proc.returncode
+    out_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env.update({"TASKS_FILE": str(tasks_path), "RESULTS_FILE": str(results_path)})
+    if config_path:
+        env["FRUGAL_CONFIG_FILE"] = str(config_path)
 
-    # --- schema validation -------------------------------------------------
-    tasks = json.loads(TASKS.read_text(encoding="utf-8"))
-    results = json.loads(RESULTS.read_text(encoding="utf-8"))
-    assert isinstance(results, list), "results.json must be a JSON array"
-    by_id = {}
-    for r in results:
-        assert set(r) == {"task_id", "answer"}, f"bad keys: {set(r)}"
-        assert isinstance(r["answer"], str), f"answer must be a string: {r['task_id']}"
-        by_id[r["task_id"]] = r["answer"]
-    missing = [t["task_id"] for t in tasks if t["task_id"] not in by_id]
-    assert not missing, f"missing task_ids: {missing}"
-    empty = [tid for tid, a in by_id.items() if not a.strip()]
+    stdout = ""
+    stderr = ""
+    exit_code: int | None = None
+    timed_out = False
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "agent.py")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=args.timeout,
+            check=False,
+        )
+        stdout = proc.stdout
+        stderr = proc.stderr
+        exit_code = proc.returncode
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        exit_code = 124
+        timed_out = True
 
-    print(f"schema OK: {len(results)} results, {len(empty)} empty answers {empty or ''}")
+    print_block("agent stdout", stdout)
+    print_block("agent stderr", stderr)
+    print(f"\nagent exit code: {exit_code}")
 
-    # --- zero-token deterministic checks (warnings only) --------------------
-    warnings = []
-    for t in tasks:
-        tid, prompt, answer = t["task_id"], t["prompt"], by_id[t["task_id"]]
-        if not answer.strip():
-            continue  # already reported as empty
-        if "python" in prompt.lower() and re.search(r"\bdef |```", answer):
-            code = "\n".join(re.findall(r"```(?:python)?\n(.*?)```", answer, re.DOTALL)) or answer
-            try:
-                compile(code, tid, "exec")
-            except SyntaxError as exc:
-                warnings.append(f"{tid}: python answer has a SyntaxError ({exc.msg})")
-        limit = re.search(r"(?:at most|maximum of|no more than)\s+(\d+)\s+words", prompt, re.I)
-        if limit and len(answer.split()) > int(limit.group(1)):
-            warnings.append(f"{tid}: answer is {len(answer.split())} words, limit {limit.group(1)}")
-        if re.search(r"[a-zA-Z,]$", answer.rstrip()) and not answer.rstrip().endswith("```"):
-            warnings.append(f"{tid}: answer may be truncated (ends mid-sentence)")
-    for w in warnings:
-        print(f"WARN {w}")
-    print(f"deterministic checks: {len(warnings)} warning(s)")
+    result_payload, result_load_errors = load_json(results_path)
+    if result_load_errors:
+        result_payload = []
+        stderr = f"{stderr}\n" + "\n".join(result_load_errors)
 
-    print("\n--- answers ---")
-    for t in tasks:
-        answer = by_id[t["task_id"]].replace("\n", " ")
-        print(f"\n[{t['task_id']}] {answer[:300]}")
-    return 0
+    report = build_run_report(tasks, result_payload, exit_code, stdout, stderr, timed_out)
+    report["tasks_validation"] = task_report
+    report["tasks_file"] = str(tasks_path)
+    report["results_file"] = str(results_path)
+    if config_path:
+        report["config_file"] = str(config_path)
+
+    result_report = report["results_validation"]
+    for error in result_report["errors"]:
+        print(f"ERROR {error}")
+    for warning in task_report["warnings"] + result_report["warnings"]:
+        print(f"WARN {warning}")
+
+    empty = result_report["empty_task_ids"]
+    print(f"schema OK: {result_report['count']} results, {len(empty)} empty answers {empty or ''}")
+    print(f"deterministic checks: {len(result_report['warnings'])} warning(s)")
+
+    token_summary = report["token_summary"]
+    if token_summary["found"]:
+        print(
+            "tokens: "
+            f"{token_summary['total_tokens']} "
+            f"(prompt {token_summary['prompt_tokens']}, completion {token_summary['completion_tokens']})"
+        )
+
+    if isinstance(result_payload, list):
+        by_id = {
+            item.get("task_id"): item.get("answer", "")
+            for item in result_payload
+            if isinstance(item, dict) and isinstance(item.get("task_id"), str)
+        }
+        print("\n--- answers ---")
+        for task in tasks:
+            answer = by_id.get(task["task_id"], "").replace("\n", " ")
+            print(f"\n[{task['task_id']}] {answer[:300]}")
+
+    write_report(report, args.json_report)
+    if timed_out:
+        return 124
+    if exit_code:
+        return int(exit_code)
+    return 0 if result_report["valid"] else 1
 
 
 if __name__ == "__main__":
