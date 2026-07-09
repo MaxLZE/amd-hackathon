@@ -216,14 +216,20 @@ async def answer_task(
         return task_id, best
 
     async with sem:
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        # A disqualification doesn't consume a real attempt: the model that
+        # just failed is provably broken, and looping back immediately tries
+        # a genuinely different, previously-untried model. Spending a slot on
+        # it would mean a disqualification on the final attempt wastes the
+        # newly-corrected pool and returns empty instead of ever trying it.
+        real_attempts = 0
+        while real_attempts < MAX_ATTEMPTS:
             remaining = deadline - time.monotonic()
             if remaining < 5:
                 return task_id, best
             model = pool.model_for(spec["tier"])
-            # Last attempt swaps to the fallback model in case the primary
-            # endpoint is the thing failing.
-            use_model = pool.fallback() if (attempt == MAX_ATTEMPTS and pool.fallback() != model) else model
+            # Last real attempt swaps to the fallback model in case the
+            # primary endpoint is the thing failing.
+            use_model = pool.fallback() if (real_attempts == MAX_ATTEMPTS - 1 and pool.fallback() != model) else model
             try:
                 resp = await asyncio.wait_for(
                     client.chat.completions.create(
@@ -244,6 +250,7 @@ async def answer_task(
                 # kept as `best` in case the retry fails too.
                 if choice.finish_reason == "length" and max_tokens < 1600 and deadline - time.monotonic() > 30:
                     max_tokens *= 2
+                    real_attempts += 1
                     continue
                 if text and SELF_HEAL:
                     text = await heal_answer(
@@ -254,12 +261,14 @@ async def answer_task(
                 if text:
                     return task_id, text
             except Exception as exc:  # noqa: BLE001 - retry on any transport/API error
-                print(f"[{task_id}] attempt {attempt} failed: {exc!r}", file=sys.stderr)
+                print(f"[{task_id}] attempt {real_attempts + 1} failed: {exc!r}", file=sys.stderr)
                 # A rejected model will fail every retry identically — drop it
-                # from the pool and retry immediately with the replacement.
+                # from the pool and retry immediately with the replacement,
+                # without spending one of the bounded real attempts.
                 if is_model_error(exc) and pool.disqualify(use_model):
                     continue
-            await asyncio.sleep(min(2**attempt + random.random(), 8))
+            real_attempts += 1
+            await asyncio.sleep(min(2**real_attempts + random.random(), 8))
     return task_id, best
 
 
