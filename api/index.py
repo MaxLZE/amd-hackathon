@@ -127,6 +127,9 @@ def run_prompt(prompt: str) -> tuple[dict, int]:
             "TASKS_FILE": str(tasks_file),
             "RESULTS_FILE": str(results_file),
             "FRUGAL_CONFIG_FILE": str(config_file),
+            # Vercel vendors pip packages onto the function's sys.path only;
+            # forward it so the agent subprocess can import `openai` too.
+            "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
         }
     )
     timeout = min(float(os.environ.get("VERCEL_AGENT_TIMEOUT", "55")), runtime.max_runtime_seconds + 20)

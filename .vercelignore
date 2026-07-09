@@ -1,0 +1,15 @@
+.env
+.git
+.github
+__pycache__
+out
+bench
+Dockerfile
+Dockerfile.workbench
+docker-compose.yml
+.dockerignore
+requirements-image.txt
+run_local.py
+amd.txt
+STRATEGY.md
+*.pdf

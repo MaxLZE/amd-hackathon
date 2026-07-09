@@ -16,9 +16,10 @@ import sys
 import time
 from typing import Any
 
+import self_heal
 from fireworks_client import FireworksClient
 from local_engine import LocalEngine
-from router_core import clean_answer, classify, load_runtime_config, parse_allowed_models, resolve_models
+from router_core import clean_answer, classify, condense_prompt, load_runtime_config, parse_allowed_models, resolve_models
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -46,6 +47,9 @@ LOCAL_MODEL_CATEGORIES = {
 # Time kept free for Fireworks fallbacks when deciding whether a local
 # generation still fits in the budget.
 FIREWORKS_RESERVE_SECONDS = float(os.environ.get("FIREWORKS_RESERVE_SECONDS", "60"))
+# Verify answers deterministically and repair hard failures (cheapest-first:
+# local fix -> local model -> one terse API repair). Disable with SELF_HEAL=0.
+SELF_HEAL = os.environ.get("SELF_HEAL", "1").strip().lower() not in {"0", "false", "off"}
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +107,66 @@ class Stats:
 # Async workers
 # ---------------------------------------------------------------------------
 
+async def heal_answer(
+    client: Any,
+    engine: LocalEngine | None,
+    model: str,
+    category: str,
+    spec: dict,
+    prompt: str,
+    task_id: str,
+    text: str,
+    deadline: float,
+    stats: "Stats",
+) -> str:
+    """Cheapest-first repair ladder; returns the best answer it can."""
+    issues = self_heal.verify(prompt, text, category)
+    if not issues:
+        return text
+    fixed = self_heal.local_fix(prompt, text, issues)
+    if fixed is not None:
+        print(f"[{task_id}] self-heal: local fix applied", file=sys.stderr)
+        text = fixed
+        issues = self_heal.verify(prompt, text, category)
+    if not self_heal.has_hard(issues):
+        return text  # soft issues are never worth spending tokens on
+
+    repair = self_heal.repair_prompt(prompt, text, issues)
+    max_tokens = spec["max_tokens"]
+    if engine is not None:
+        reserve = FIREWORKS_RESERVE_SECONDS if client is not None else 5.0
+        local = await engine.generate(repair, max_tokens, deadline - reserve)
+        if local is not None:
+            candidate = clean_answer(local[0])
+            if candidate and not self_heal.has_hard(self_heal.verify(prompt, candidate, category)):
+                print(f"[{task_id}] self-heal: repaired with local model (0 tokens)", file=sys.stderr)
+                return candidate
+    if client is None:
+        return text
+    remaining = deadline - time.monotonic()
+    if remaining < 15:
+        return text
+    try:
+        resp = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": repair}],
+                max_tokens=max_tokens,
+                temperature=0,
+            ),
+            timeout=min(PER_CALL_TIMEOUT, remaining),
+        )
+    except Exception as exc:  # noqa: BLE001 - keep the original answer on any failure
+        print(f"[{task_id}] self-heal repair call failed: {exc!r}", file=sys.stderr)
+        return text
+    stats.add(category, getattr(resp, "usage", None))
+    candidate = clean_answer(resp.choices[0].message.content)
+    if candidate and not self_heal.has_hard(self_heal.verify(prompt, candidate, category)):
+        print(f"[{task_id}] self-heal: repaired via {model}", file=sys.stderr)
+        return candidate
+    return text
+
+
 async def answer_task(
     client: Any,
     sem: asyncio.Semaphore,
@@ -116,7 +180,7 @@ async def answer_task(
     prompt = task["prompt"]
     category = classify(prompt)
     spec = CATEGORIES.get(category) or CATEGORIES["factual"]
-    content = f"{prompt}\n\n{spec['instruction']}"
+    content = f"{condense_prompt(prompt)}\n\n{spec['instruction']}"
     max_tokens = spec["max_tokens"]
     best = ""  # best answer seen so far — never return "" if we paid for text
 
@@ -128,7 +192,17 @@ async def answer_task(
         if local is not None:
             text, finish = local
             answer = clean_answer(text)
-            if answer and finish == "stop":
+            suspect = finish != "stop"
+            if answer and SELF_HEAL:
+                issues = self_heal.verify(prompt, answer, category)
+                fixed = self_heal.local_fix(prompt, answer, issues)
+                if fixed is not None:
+                    answer = fixed
+                    issues = self_heal.verify(prompt, answer, category)
+                # A local answer costs zero tokens but a hard-broken one costs
+                # the task at the accuracy gate — escalate those to Fireworks.
+                suspect = suspect or self_heal.has_hard(issues)
+            if answer and not suspect:
                 stats.local_answers += 1
                 print(f"[{task_id}] answered locally ({category})", file=sys.stderr)
                 return task_id, answer
@@ -171,6 +245,12 @@ async def answer_task(
                 if choice.finish_reason == "length" and max_tokens < 1600 and deadline - time.monotonic() > 30:
                     max_tokens *= 2
                     continue
+                if text and SELF_HEAL:
+                    text = await heal_answer(
+                        client, engine, use_model, category, spec, prompt, task_id, text, deadline, stats
+                    )
+                    if len(text) > len(best):
+                        best = text
                 if text:
                     return task_id, text
             except Exception as exc:  # noqa: BLE001 - retry on any transport/API error
