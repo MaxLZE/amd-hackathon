@@ -41,6 +41,6 @@ ENV LOCAL_MODEL_PATH=/app/models/local.gguf \
     LOCAL_MODEL_THREADS=2 \
     LOCAL_MODEL_CTX=4096
 
-COPY agent.py fireworks_client.py router_core.py local_engine.py .
+COPY agent.py fireworks_client.py router_core.py local_engine.py self_heal.py .
 
 ENTRYPOINT ["python", "agent.py"]

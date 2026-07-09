@@ -252,6 +252,23 @@ def clean_answer(text: str) -> str:
     return text.strip()
 
 
+def condense_prompt(text: str) -> str:
+    """Lossless whitespace trim: drop trailing spaces and collapse blank-line
+    runs. Leading indentation is preserved — task prompts can contain code."""
+    lines = [line.rstrip() for line in text.split("\n")]
+    out: list[str] = []
+    blank = 0
+    for line in lines:
+        if not line:
+            blank += 1
+            if blank > 1:
+                continue
+        else:
+            blank = 0
+        out.append(line)
+    return "\n".join(out).strip()
+
+
 def parse_allowed_models(value: str) -> list[str]:
     raw = (value or "").strip()
     if not raw:
