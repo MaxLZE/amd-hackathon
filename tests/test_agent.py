@@ -132,6 +132,22 @@ class AgentEndToEndTests(unittest.TestCase):
         self.assertIn("model disqualified: missing-model", proc.stderr)
         self.assertEqual(StubFireworks.calls.count("missing-model"), 1)
 
+    def test_disqualification_on_the_final_attempt_still_tries_the_fallback(self) -> None:
+        # Regression: a disqualify used to consume one of MAX_ATTEMPTS. With
+        # only one attempt available, disqualifying the first model on that
+        # attempt left no iteration to ever try the corrected pool, so the
+        # task came back empty even though a working model existed.
+        tasks = [{"task_id": "t1", "prompt": "What is the capital of Australia?"}]
+        proc, results = self.run_agent(
+            tasks,
+            "missing-model,good-easy",
+            {"FRUGAL_MODEL_EASY": "missing-model", "MAX_ATTEMPTS": "1"},
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(results[0]["answer"], "answer from good-easy")
+        self.assertIn("model disqualified: missing-model", proc.stderr)
+
     def test_truncated_answer_is_kept_not_discarded(self) -> None:
         tasks = [{"task_id": "t1", "prompt": "What is the capital of Australia?"}]
         proc, results = self.run_agent(tasks, "truncator", {"FRUGAL_MODEL_EASY": "truncator"})
