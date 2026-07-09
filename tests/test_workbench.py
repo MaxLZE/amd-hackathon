@@ -69,10 +69,29 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(loaded.max_runtime_seconds, 120)
         self.assertEqual(resolved["easy"], "allowed-a")
 
-    def test_parse_allowed_models_accepts_json_array(self) -> None:
+    def test_parse_allowed_models_accepts_json_array_and_expands_bare_names(self) -> None:
+        # Bare names 404 against the Fireworks API even when the model is
+        # live under accounts/fireworks/models/ — expand them.
         models = parse_allowed_models('["minimax-m3", "kimi-k2p7-code"]')
 
-        self.assertEqual(models, ["minimax-m3", "kimi-k2p7-code"])
+        self.assertEqual(
+            models,
+            ["accounts/fireworks/models/minimax-m3", "accounts/fireworks/models/kimi-k2p7-code"],
+        )
+
+    def test_parse_allowed_models_keeps_pathed_ids_verbatim(self) -> None:
+        models = parse_allowed_models(
+            "accounts/fireworks/models/kimi-k2p7-code, accounts/customer-team/models/private-ft, glm-5p2"
+        )
+
+        self.assertEqual(
+            models,
+            [
+                "accounts/fireworks/models/kimi-k2p7-code",
+                "accounts/customer-team/models/private-ft",
+                "accounts/fireworks/models/glm-5p2",
+            ],
+        )
 
     def test_prompt_to_tasks_accepts_plain_prompt(self) -> None:
         tasks, report = prompt_to_tasks("Explain how HTTPS works.")

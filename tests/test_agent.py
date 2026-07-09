@@ -24,7 +24,9 @@ class StubFireworks(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 - http.server API
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}")
-        model = body.get("model", "")
+        # parse_allowed_models canonicalizes bare names to full account
+        # paths; the stub keys its behavior on the short name either way.
+        model = body.get("model", "").rsplit("/", 1)[-1]
         type(self).calls.append(model)
 
         if model == "missing-model":
@@ -129,7 +131,7 @@ class AgentEndToEndTests(unittest.TestCase):
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(results[0]["answer"], "answer from good-easy")
-        self.assertIn("model disqualified: missing-model", proc.stderr)
+        self.assertIn("model disqualified: accounts/fireworks/models/missing-model", proc.stderr)
         self.assertEqual(StubFireworks.calls.count("missing-model"), 1)
 
     def test_disqualification_on_the_final_attempt_still_tries_the_fallback(self) -> None:
@@ -146,7 +148,7 @@ class AgentEndToEndTests(unittest.TestCase):
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(results[0]["answer"], "answer from good-easy")
-        self.assertIn("model disqualified: missing-model", proc.stderr)
+        self.assertIn("model disqualified: accounts/fireworks/models/missing-model", proc.stderr)
 
     def test_truncated_answer_is_kept_not_discarded(self) -> None:
         tasks = [{"task_id": "t1", "prompt": "What is the capital of Australia?"}]
