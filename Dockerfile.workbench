@@ -1,14 +1,46 @@
+# Dev workbench with the same bundled local model as the submission
+# Dockerfile, so the browser UI's "Local" badge and local-first routing can
+# be tested interactively. Slower to build (~2GB model download + a
+# from-source llama-cpp-python compile) and a heavier image than a
+# Fireworks-only workbench would be — see Dockerfile for the actual
+# submission image these two stages mirror.
+
+FROM python:3.12-slim AS build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential cmake ninja-build git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-image.txt .
+# Portable AVX2 baseline — see Dockerfile for why -march=native is avoided.
+ENV CMAKE_ARGS="-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON"
+RUN pip install --no-cache-dir --prefix=/install -r requirements-image.txt
+
+ARG LOCAL_MODEL_URL=https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf
+RUN mkdir -p /models \
+    && curl -L --fail --retry 8 --retry-all-errors --retry-delay 2 -C - \
+        -o /models/local.gguf "$LOCAL_MODEL_URL"
+
+
 FROM python:3.12-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=build /install /usr/local
+COPY --from=build /models /app/models
 
-COPY agent.py fireworks_client.py frugal_checks.py local_engine.py router_core.py run_local.py workbench_server.py ./
+ENV LOCAL_MODEL_PATH=/app/models/local.gguf \
+    LOCAL_MODEL_THREADS=2 \
+    LOCAL_MODEL_CTX=4096
+
+COPY agent.py fireworks_client.py frugal_checks.py local_engine.py router_core.py run_local.py self_heal.py workbench_server.py ./
 COPY tests ./tests
 COPY web ./web
 
