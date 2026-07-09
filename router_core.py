@@ -226,6 +226,8 @@ def resolve_models(allowed: list[str], config: RuntimeConfig | None = None) -> d
     resolved = {}
     for tier, prefs in runtime.tier_preferences.items():
         override = runtime.model_overrides.get(tier)
+        if override:
+            override = _canonical_model_id(override)
         if override and override in allowed:
             resolved[tier] = override
             continue
@@ -269,6 +271,18 @@ def condense_prompt(text: str) -> str:
     return "\n".join(out).strip()
 
 
+def _canonical_model_id(model: str) -> str:
+    """Expand a bare model name to its full Fireworks path.
+
+    The API only serves models under account paths: "kimi-k2p7-code" 404s
+    with model_not_found even when accounts/fireworks/models/kimi-k2p7-code
+    is live, and a short-name ALLOWED_MODELS otherwise takes the whole pool
+    down. Anything already pathed is kept verbatim (custom accounts stay
+    untouched, and a judge-supplied list of full IDs passes through as-is).
+    """
+    return model if "/" in model else f"accounts/fireworks/models/{model}"
+
+
 def parse_allowed_models(value: str) -> list[str]:
     raw = (value or "").strip()
     if not raw:
@@ -279,5 +293,9 @@ def parse_allowed_models(value: str) -> list[str]:
         except json.JSONDecodeError:
             parsed = None
         if isinstance(parsed, list):
-            return [str(model).strip() for model in parsed if str(model).strip()]
-    return [model.strip().strip("'\"") for model in raw.split(",") if model.strip().strip("'\"")]
+            return [_canonical_model_id(str(model).strip()) for model in parsed if str(model).strip()]
+    return [
+        _canonical_model_id(model.strip().strip("'\""))
+        for model in raw.split(",")
+        if model.strip().strip("'\"")
+    ]
