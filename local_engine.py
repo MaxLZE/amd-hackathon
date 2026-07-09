@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import statistics
 import sys
 import time
 
@@ -65,14 +66,25 @@ class LocalEngine:
         if os.environ.get("LOCAL_DECODE_TPS"):
             return  # explicit override wins
         try:
-            started = time.monotonic()
-            resp = self._generate_sync("Say OK.", 8)
-            elapsed = max(time.monotonic() - started, 0.01)
-            tokens = (resp.get("usage") or {}).get("completion_tokens", 0)
-            if tokens:
-                # 20% safety margin on the observed speed
-                self._decode_tps = max(0.1, (tokens / elapsed) * 0.8)
-                print(f"local decode calibrated: {tokens / elapsed:.2f} tok/s", file=sys.stderr)
+            # The model is mmap'd: the very first inference touches every
+            # weight page for the first time, so timing it measures cold
+            # disk I/O (seconds) rather than decode speed. Warm the page
+            # cache with an untimed call before the timed ones.
+            self._generate_sync("Hi", 4)
+            samples = []
+            for _ in range(3):
+                started = time.monotonic()
+                resp = self._generate_sync("Say OK.", 8)
+                elapsed = max(time.monotonic() - started, 0.01)
+                tokens = (resp.get("usage") or {}).get("completion_tokens", 0)
+                if tokens:
+                    samples.append(tokens / elapsed)
+            if samples:
+                # Median of 3 discards a one-off disk/scheduler hiccup that a
+                # single sample can't distinguish from genuinely slow hardware;
+                # 20% safety margin on top of that.
+                self._decode_tps = max(0.1, statistics.median(samples) * 0.8)
+                print(f"local decode calibrated: {statistics.median(samples):.2f} tok/s (samples={[round(s, 2) for s in samples]})", file=sys.stderr)
         except Exception as exc:  # noqa: BLE001 - keep the default estimate
             print(f"local calibration failed: {exc!r}", file=sys.stderr)
 

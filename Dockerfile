@@ -22,7 +22,9 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements-image.txt
 # Qwen2.5-3B-Instruct Q4_K_M (~1.9 GB) fits the 4 GB grading RAM with room for
 # the agent. Pinned to a specific revision so builds are reproducible.
 ARG LOCAL_MODEL_URL=https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf
-RUN mkdir -p /models && curl -L --fail --retry 3 -o /models/local.gguf "$LOCAL_MODEL_URL"
+RUN mkdir -p /models \
+    && curl -L --fail --retry 8 --retry-all-errors --retry-delay 2 -C - \
+        -o /models/local.gguf "$LOCAL_MODEL_URL"
 
 
 FROM python:3.12-slim
