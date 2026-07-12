@@ -278,6 +278,13 @@ async def answer_task(
                 # without spending one of the bounded real attempts.
                 if is_model_error(exc) and pool.disqualify(use_model):
                     continue
+                # A proxy can reject the reasoning_effort param with any
+                # status, not just the 400 create_chat handles. Dropping one
+                # effort level before the next attempt costs at most extra
+                # reasoning tokens on this model; never retrying a possibly
+                # poisoned param costs every task on it.
+                if EFFORT is not None:
+                    EFFORT.downgrade(use_model)
             real_attempts += 1
             await asyncio.sleep(min(2**real_attempts + random.random(), 8))
     return task_id, best
