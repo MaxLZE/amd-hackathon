@@ -18,10 +18,12 @@ COPY requirements-image.txt .
 ENV CMAKE_ARGS="-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON"
 RUN pip install --no-cache-dir --prefix=/install -r requirements-image.txt
 
-# Bundled local model: answers for easy categories cost zero Fireworks tokens.
-# Qwen2.5-3B-Instruct Q4_K_M (~1.9 GB) fits the 4 GB grading RAM with room for
-# the agent. Pinned to a specific revision so builds are reproducible.
-ARG LOCAL_MODEL_URL=https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf
+# Bundled local model: answers for local categories cost zero Fireworks
+# tokens. Qwen2.5-1.5B beat both 3B candidates on judged accuracy (19/22
+# across all 8 categories vs the 3B's 0/3 NER), decodes ~1.5x faster on
+# 2 vCPU, and halves peak RSS (1.9 -> 1.1 GB file, ~1.9 GB resident).
+# Will be replaced by its fine-tuned student (docs/FINETUNE.md).
+ARG LOCAL_MODEL_URL=https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
 RUN mkdir -p /models \
     && curl -L --fail --retry 8 --retry-all-errors --retry-delay 2 -C - \
         -o /models/local.gguf "$LOCAL_MODEL_URL"

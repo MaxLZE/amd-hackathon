@@ -1,0 +1,271 @@
+{
+  "model": "/home/kivye/models/llama32-3b.q4_k_m.gguf",
+  "by_category": {
+    "factual": {
+      "tasks": 3,
+      "escalated": 0,
+      "yes": 3,
+      "judged": 3
+    },
+    "math": {
+      "tasks": 3,
+      "escalated": 0,
+      "yes": 2,
+      "judged": 3
+    },
+    "sentiment": {
+      "tasks": 3,
+      "escalated": 0,
+      "yes": 3,
+      "judged": 3
+    },
+    "summary": {
+      "tasks": 3,
+      "escalated": 0,
+      "yes": 3,
+      "judged": 3
+    },
+    "ner": {
+      "tasks": 3,
+      "escalated": 0,
+      "yes": 0,
+      "judged": 3
+    },
+    "code_debug": {
+      "tasks": 3,
+      "escalated": 0,
+      "yes": 2,
+      "judged": 3
+    },
+    "logic": {
+      "tasks": 3,
+      "escalated": 0,
+      "yes": 1,
+      "judged": 3
+    },
+    "codegen": {
+      "tasks": 3,
+      "escalated": 0,
+      "yes": 1,
+      "judged": 3
+    }
+  },
+  "rows": [
+    {
+      "task_id": "fact1",
+      "category": "factual",
+      "prompt": "Explain how photosynthesis works.",
+      "answer": "Photosynthesis is the process by which plants, algae, and some bacteria convert light energy from the sun into chemical energy in the form of glucose. This process occurs in specialized organelles called chloroplasts, which contain the pigment chlorophyll that absorbs light energy. Water and carbon dioxide are also required, which are absorbed through the plant's roots and leaves. The energy from light is then used to convert these substances into glucose and oxygen.",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "fact2",
+      "category": "factual",
+      "prompt": "What is the difference between HTTP and HTTPS?",
+      "answer": "The primary difference between HTTP and HTTPS is the level of security they provide. HTTP (Hypertext Transfer Protocol) is an insecure protocol that transmits data in plain text, making it vulnerable to interception and eavesdropping. HTTPS (Hypertext Transfer Protocol Secure) adds an SSL/TLS encryption layer, ensuring that data remains confidential and secure. This encryption is essential for protecting sensitive information, such as passwords and credit card numbers.",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "fact3",
+      "category": "factual",
+      "prompt": "Define inflation and explain what causes it.",
+      "answer": "Inflation is a sustained increase in the general price level of goods and services in an economy over time. It occurs when the demand for goods and services exceeds their supply, causing businesses to raise prices. The main causes of inflation include monetary policy, such as excessive money printing or low interest rates, and economic growth, which can lead to increased demand and higher prices.",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "math1",
+      "category": "math",
+      "prompt": "A store sells a jacket for $80. It is discounted by 25%, then a 10% sales tax is added. What is the final price?",
+      "answer": "Step 1: Calculate the discount amount.\nDiscount = 25% of $80 = 0.25 * $80 = $20.\n\nStep 2: Calculate the discounted price.\nDiscounted price = $80 - $20 = $60.\n\nStep 3: Calculate the sales tax amount.\nSales tax = 10% of $60 = 0.10 * $60 = $6.\n\nStep 4: Calculate the final price.\nFinal price = Discounted price + Sales tax = $60 + $6 = $66.\n\nAnswer: $66",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "math2",
+      "category": "math",
+      "prompt": "A company's revenue grows 15% per year. If revenue is $2 million today, what will it be in 3 years?",
+      "answer": "To find the revenue in 3 years, we need to calculate the growth for each year.\n\nYear 1: \nRevenue today = $2 million\nGrowth rate = 15%\nRevenue in 1 year = $2 million * (1 + 0.15) = $2.3 million\n\nYear 2: \nRevenue in 1 year = $2.3 million\nGrowth rate = 15%\nRevenue in 2 years = $2.3 million * (1 + 0.15) = $2.645 million\n\nYear 3: \nRevenue in 2 years = $2.645 million\nGrowth rate = 15%\nRevenue in 3 years = $2.645 million * (1 + 0.15) = $3.05625 million\n\nAnswer: $3.05625 million",
+      "finish": "stop",
+      "suspect": false,
+      "match": false
+    },
+    {
+      "task_id": "math3",
+      "category": "math",
+      "prompt": "Tom reads 12 pages per day for 5 days, then 20 pages per day for 4 days. How many pages did he read in total, and what was his average per day?",
+      "answer": "Step 1: Calculate the total pages read in the first 5 days.\n12 pages/day * 5 days = 60 pages\n\nStep 2: Calculate the total pages read in the next 4 days.\n20 pages/day * 4 days = 80 pages\n\nStep 3: Calculate the total pages read in 9 days.\n60 pages + 80 pages = 140 pages\n\nStep 4: Calculate the average pages read per day.\nTotal pages / Total days = 140 pages / 9 days = 15.56 pages/day\n\nAnswer: 140",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "sent1",
+      "category": "sentiment",
+      "prompt": "Classify the sentiment of this review and justify your answer: 'The delivery was fast, but the product broke after two days. Very disappointed.'",
+      "answer": "The sentiment label for this review is \"Negative\".\n\nThe justification is that the reviewer expresses disappointment and frustration with the product's quality, despite acknowledging a positive aspect (fast delivery), which outweighs the negative experience of the product breaking.",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "sent2",
+      "category": "sentiment",
+      "prompt": "What is the sentiment of this tweet? 'Just got promoted at work!! Best day ever!'",
+      "answer": "The sentiment label is: POSITIVE\n\nThe justification is that the use of the exclamation mark and the phrase \"Best day ever\" convey a strong sense of excitement and joy, indicating a highly positive emotional state.",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "sent3",
+      "category": "sentiment",
+      "prompt": "Label the sentiment (positive, negative, or neutral) of: 'The meeting has been moved to 3pm on Thursday.'",
+      "answer": "Neutral\n\nThe sentiment label is neutral because the statement simply reports a factual change in the meeting time without expressing any opinion or emotion.",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "summ1",
+      "category": "summary",
+      "prompt": "Summarise the following text in one sentence: The Amazon rainforest, covering much of northwestern Brazil and extending into Colombia, Peru and other South American countries, is the world's largest tropical rainforest, famed for its biodiversity. It is crisscrossed by thousands of rivers, including the powerful Amazon. Deforestation has accelerated in recent decades, threatening countless species and the global climate.",
+      "answer": "The Amazon rainforest, spanning across Brazil and other South American countries, is the world's largest tropical rainforest and a hub of biodiversity threatened by accelerating deforestation.",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "summ2",
+      "category": "summary",
+      "prompt": "Condense this passage to at most 20 words: Remote work became widespread during the pandemic. Many companies discovered productivity remained stable or improved, leading them to adopt permanent hybrid policies. However, some leaders worry about weakened company culture and reduced mentorship opportunities for junior employees.",
+      "answer": "Remote work became widespread, leading companies to adopt permanent hybrid policies, but concerns about culture and mentorship remain.",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "summ3",
+      "category": "summary",
+      "prompt": "Provide a two-sentence summary of the following: Electric vehicles are becoming increasingly popular as battery costs fall and charging infrastructure expands. Governments worldwide offer incentives to accelerate adoption, and several countries plan to ban new petrol car sales by 2035. Automakers are responding by investing billions in electrification, though supply chain constraints on lithium and other minerals remain a challenge.",
+      "answer": "Electric vehicles are gaining popularity as battery costs decrease and charging infrastructure expands, with governments worldwide offering incentives to accelerate adoption. Automakers are investing heavily in electrification, but supply chain constraints on key minerals like lithium pose a significant challenge to widespread adoption.",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "ner1",
+      "category": "ner",
+      "prompt": "Extract and label all named entities (person, organization, location, date) in: 'Tim Cook announced that Apple will open a new campus in Austin, Texas in March 2026.'",
+      "answer": "1. Tim Cook - Person\n2. Apple - Organization\n3. Austin - Location\n4. Texas - Location\n5. March - Date",
+      "finish": "stop",
+      "suspect": false,
+      "match": false
+    },
+    {
+      "task_id": "ner2",
+      "category": "ner",
+      "prompt": "Identify the entities and their types in this sentence: 'Angela Merkel met with representatives of the World Health Organization in Geneva on 12 May 2019.'",
+      "answer": "1. Angela Merkel - Person\n2. World Health Organization - Organization\n3. Geneva - Location\n4. May - Month\n5. 12 - Date",
+      "finish": "stop",
+      "suspect": false,
+      "match": false
+    },
+    {
+      "task_id": "ner3",
+      "category": "ner",
+      "prompt": "List all person, organization, location, and date entities: 'Elon Musk's SpaceX launched a Falcon 9 rocket from Cape Canaveral on Tuesday, while NASA observers watched from Houston.'",
+      "answer": "1. Elon Musk - Person\n2. SpaceX - Organization\n3. Falcon 9 rocket - Object\n4. Cape Canaveral - Location\n5. NASA - Organization\n6. Houston - Location\n7. Tuesday - Date",
+      "finish": "stop",
+      "suspect": false,
+      "match": false
+    },
+    {
+      "task_id": "dbg1",
+      "category": "code_debug",
+      "prompt": "This function should return the factorial of n but it doesn't work. Find the bug and fix it:\n\ndef factorial(n):\n    result = 0\n    for i in range(1, n + 1):\n        result *= i\n    return result",
+      "answer": "The bug in the code is that it initializes the result variable to 0, which means the factorial of any number will be 0. The correct initialization should be to 1, since the factorial of 0 is 1.\n\n```python\ndef factorial(n):\n    result = 1\n    for i in range(1, n + 1):\n        result *= i\n    return result\n```",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "dbg2",
+      "category": "code_debug",
+      "prompt": "Why does this JavaScript function sometimes return the wrong result? Fix it.\n\nfunction average(arr) {\n  let sum = 0;\n  for (let i = 0; i <= arr.length; i++) {\n    sum += arr[i];\n  }\n  return sum / arr.length;\n}",
+      "answer": "The function has a bug because it will throw an \"undefined\" error when trying to access `arr[i]` at index `arr.length`, which is out of bounds. \n\n```javascript\nfunction average(arr) {\n  let sum = 0;\n  for (let i = 0; i < arr.length; i++) {\n    sum += arr[i];\n  }\n  return sum / arr.length;\n}\n```",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "dbg3",
+      "category": "code_debug",
+      "prompt": "This Python code is supposed to count word frequencies but crashes. Identify the bug and provide the corrected implementation:\n\ndef word_counts(text):\n    counts = {}\n    for word in text.split():\n        counts[word] += 1\n    return counts",
+      "answer": "The bug in the code is that it does not handle punctuation marks attached to words. When the code tries to increment the count of a word, it will not be able to find the word in the dictionary if it has a punctuation mark attached.\n\n```python\nimport re\n\ndef word_counts(text):\n    counts = {}\n    for word in re.findall(r'\\b\\w+\\b', text.lower()):\n        counts[word] = counts.get(word, 0) + 1\n    return counts\n```",
+      "finish": "stop",
+      "suspect": false,
+      "match": false
+    },
+    {
+      "task_id": "logic1",
+      "category": "logic",
+      "prompt": "Three friends \u2014 Alice, Bob, and Carol \u2014 each have a different pet: a cat, a dog, and a fish. Alice does not have the dog. Bob is allergic to fur, so he has neither the cat nor the dog. Who has which pet?",
+      "answer": "Let's break down the constraints:\n\n1. Alice does not have the dog.\n2. Bob is allergic to fur, so he has neither the cat nor the dog.\n\nFrom the second constraint, we know Bob has a pet that is not a mammal (since he's allergic to fur). The only remaining option is a fish.\n\nNow, let's look at Alice. Since she doesn't have the dog, and Bob has the fish, Alice must have the cat.\n\nThe only pet left is the dog, which must belong to Carol.\n\nSo, the final answer is:\n\n- Alice has the cat.\n- Bob has the fish.\n- Carol has the dog.",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "logic2",
+      "category": "logic",
+      "prompt": "Four people sit in a row of four seats. Dana is not at either end. Eve sits immediately to the left of Frank. Gil is at the far right. Determine the seating order from left to right, satisfying all conditions.",
+      "answer": "Let's break down the constraints:\n\n1. Dana is not at either end.\n2. Eve sits immediately to the left of Frank.\n3. Gil is at the far right.\n\nFrom constraint 2, we know that Eve and Frank must be together, and since Dana is not at either end, they must be in the middle two seats. \n\nSo, the order is: Dana, Frank, Eve, Gil.\n\nThis order satisfies all conditions: Dana is not at either end, Eve sits immediately to the left of Frank, and Gil is at the far right.",
+      "finish": "stop",
+      "suspect": false,
+      "match": false
+    },
+    {
+      "task_id": "logic3",
+      "category": "logic",
+      "prompt": "A puzzle: exactly one of three boxes contains a prize. Box A says 'The prize is here.' Box B says 'The prize is not here.' Box C says 'The prize is not in Box A.' Exactly one statement is true. Which box has the prize?",
+      "answer": "To solve this puzzle, let's analyze the statements:\n\n- Box A says \"The prize is here.\" If this statement is true, then the prize is indeed in Box A.\n- Box B says \"The prize is not here.\" If this statement is true, then the prize is not in Box A or Box B.\n- Box C says \"The prize is not in Box A.\" If this statement is true, then the prize is not in Box A.\n\nNow, let's consider the possibilities:\n\n1. If Box A is true, then the prize is in Box A. But this would mean Box B is false, and Box C is also true (since the prize is not in Box A). However, we are given that exactly one statement is true, so this scenario is not possible.\n2. If Box B is true, then the prize is not in Box A or Box B. This means the prize must be in Box C. But this would mean Box C is true, which contradicts the fact that exactly one statement is true.\n3. If Box C is true, then the prize is not in Box A. This means the prize must be in either Box A or Box B. Since Box B says the prize is not in Box A, Box B cannot be true. Therefore, Box C must be the false statement.\n\nSo, the only possible scenario is that Box C is the false statement, and the prize is in Box A.",
+      "finish": "stop",
+      "suspect": false,
+      "match": false
+    },
+    {
+      "task_id": "gen1",
+      "category": "codegen",
+      "prompt": "Write a Python function that takes a list of integers and returns a new list containing only the even numbers, preserving order.",
+      "answer": "```python\ndef filter_even_numbers(numbers):\n    \"\"\"\n    Returns a new list containing only the even numbers from the input list, preserving order.\n    \"\"\"\n    return [num for num in numbers if num % 2 == 0]\n```",
+      "finish": "stop",
+      "suspect": false,
+      "match": true
+    },
+    {
+      "task_id": "gen2",
+      "category": "codegen",
+      "prompt": "Implement a function `is_palindrome(s)` that returns True if the string s is a palindrome, ignoring case, spaces, and punctuation.",
+      "answer": "```python\nimport re\n\ndef is_palindrome(s):\n    \"\"\"Return True if the string s is a palindrome, ignoring case, spaces, and punctuation.\"\"\"\n    s = re.sub(r'\\W+', '', s).lower()\n    return s == s[::-1]\n```",
+      "finish": "stop",
+      "suspect": false,
+      "match": false
+    },
+    {
+      "task_id": "gen3",
+      "category": "codegen",
+      "prompt": "Write a JavaScript function that debounces another function, delaying its execution until `wait` milliseconds have passed since the last call.",
+      "answer": "```javascript\nfunction debounce(wait, fn) {\n  let timer = null;\n  return function() {\n    const context = this;\n    const args = arguments;\n    return new Promise(resolve => {\n      clearTimeout(timer);\n      timer = setTimeout(() => {\n        fn.apply(context, args);\n        resolve();\n      }, wait);\n    });\n  };\n}\n```",
+      "finish": "stop",
+      "suspect": false,
+      "match": false
+    }
+  ]
+}

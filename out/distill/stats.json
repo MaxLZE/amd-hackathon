@@ -1,0 +1,66 @@
+{
+  "tokens": 1646611,
+  "categories": {
+    "factual": {
+      "generated": 275,
+      "dedup_dropped": 0,
+      "contaminated": 1,
+      "filter_failed": 0,
+      "kept": 250
+    },
+    "math": {
+      "generated": 402,
+      "dedup_dropped": 0,
+      "contaminated": 0,
+      "filter_failed": 151,
+      "kept": 241
+    },
+    "sentiment": {
+      "generated": 250,
+      "dedup_dropped": 0,
+      "contaminated": 0,
+      "filter_failed": 0,
+      "kept": 250
+    },
+    "summary": {
+      "generated": 50,
+      "dedup_dropped": 0,
+      "contaminated": 0,
+      "filter_failed": 0,
+      "kept": 50
+    },
+    "ner": {
+      "generated": 250,
+      "dedup_dropped": 0,
+      "contaminated": 0,
+      "filter_failed": 0,
+      "kept": 250
+    },
+    "code_debug": {
+      "generated": 276,
+      "dedup_dropped": 0,
+      "contaminated": 0,
+      "filter_failed": 18,
+      "kept": 250
+    },
+    "logic": {
+      "generated": 252,
+      "dedup_dropped": 0,
+      "contaminated": 0,
+      "filter_failed": 0,
+      "kept": 250
+    },
+    "codegen": {
+      "generated": 275,
+      "dedup_dropped": 0,
+      "contaminated": 0,
+      "filter_failed": 10,
+      "kept": 250
+    }
+  },
+  "total": 1791,
+  "train": 1702,
+  "eval": 89,
+  "answer_pass_rate": 0.9091,
+  "scaled_to_full": false
+}
