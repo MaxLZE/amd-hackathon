@@ -16,6 +16,26 @@ the judging proxy) while staying above the LLM-judge accuracy gate.
   cache answers; evaluation uses unseen prompt variants"). Exit code, valid
   JSON, and the 10-minute cap are hard gates.
 
+## Root cause of the 31.6% submission (fixed 2026-07-12)
+
+Every allowed model bills **hidden reasoning tokens** (60–100 for a
+one-sentence answer). With the tight per-category `max_tokens` caps the
+model hit the cap *mid-reasoning*, so the visible content was truncated
+chain-of-thought garbage — the judge failed those answers. On the 2-vCPU
+grading VM the local model mostly skipped itself for lack of time, so
+nearly every task took this broken Fireworks path.
+
+Fix: `reasoning_effort: "none"` on every call (`fireworks_client.create_chat`),
+with a per-model downgrade ladder none → low → omit for models that 400
+("none" works on GLM/Kimi/DeepSeek; gpt-oss takes "low"). Result on the
+24-task suite: **24/24 judged equivalent, 3,736 total tokens** (77.9% below
+reference). Double win: reasoning was also the dominant completion-token cost.
+Note: pre-fix accuracy numbers (including the 87.5% below) are unreliable —
+the bench judge itself was truncating its 4-token verdict on hidden reasoning.
+
+Local Qwen2.5-3B judged eval (easy categories): factual 3/3, sentiment 3/3,
+summary 3/3, **ner 0/3** — NER removed from `LOCAL_MODEL_CATEGORIES`.
+
 ## Strategy ladder, ranked by leverage
 
 Measured baseline (24-task mock suite): router 1,634 tokens @ 87.5% match;

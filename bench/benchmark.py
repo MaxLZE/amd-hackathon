@@ -36,7 +36,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import self_heal  # noqa: E402
-from fireworks_client import FireworksClient  # noqa: E402
+from fireworks_client import FireworksClient, ReasoningEffort, create_chat  # noqa: E402
 from frugal_checks import deterministic_warnings  # noqa: E402
 from router_core import (  # noqa: E402
     classify,
@@ -67,10 +67,10 @@ def find_model(allowed: list[str], fragment: str) -> str | None:
     return next((model for model in allowed if fragment in model), None)
 
 
-async def timed_call(client: FireworksClient, **kwargs) -> dict[str, Any]:
+async def timed_call(client: FireworksClient, effort: ReasoningEffort | None = None, **kwargs) -> dict[str, Any]:
     started = time.monotonic()
     try:
-        resp = await client.chat.completions.create(**kwargs)
+        resp = await create_chat(client, effort, **kwargs)
     except Exception as exc:  # noqa: BLE001 - record the failure, keep benching
         return {"ok": False, "error": repr(exc), "latency_s": round(time.monotonic() - started, 2)}
     latency = time.monotonic() - started
@@ -95,6 +95,7 @@ async def bench_task(
     categories: dict[str, dict[str, Any]],
     reference_model: str,
     heal: bool = False,
+    effort: ReasoningEffort | None = None,
 ) -> dict[str, Any]:
     prompt = task["prompt"]
     category = classify(prompt)
@@ -104,6 +105,7 @@ async def bench_task(
     async with sem:
         routed = await timed_call(
             client,
+            effort,
             model=router_model,
             messages=[{"role": "user", "content": f"{condense_prompt(prompt)}\n\n{spec['instruction']}"}],
             max_tokens=spec["max_tokens"],
@@ -121,6 +123,7 @@ async def bench_task(
             async with sem:
                 repair = await timed_call(
                     client,
+                    effort,
                     model=router_model,
                     messages=[{"role": "user", "content": content}],
                     max_tokens=spec["max_tokens"],
@@ -150,14 +153,23 @@ async def bench_task(
     }
 
 
-async def judge_task(client: FireworksClient, sem: asyncio.Semaphore, judge_model: str, row: dict[str, Any], prompt: str) -> None:
+async def judge_task(
+    client: FireworksClient,
+    sem: asyncio.Semaphore,
+    judge_model: str,
+    row: dict[str, Any],
+    prompt: str,
+    effort: ReasoningEffort | None = None,
+) -> None:
     routed, reference = row["routed"], row["reference"]
     if not (routed.get("ok") and reference.get("ok")):
         row["match"] = None
         return
     content = JUDGE_PROMPT.format(prompt=prompt, reference=reference["answer"], candidate=routed["answer"])
     async with sem:
-        verdict = await timed_call(client, model=judge_model, messages=[{"role": "user", "content": content}], max_tokens=4, temperature=0)
+        # Without effort suppression the judge burns its 4-token cap on
+        # hidden reasoning and returns an empty/garbage verdict.
+        verdict = await timed_call(client, effort, model=judge_model, messages=[{"role": "user", "content": content}], max_tokens=4, temperature=0)
     if not verdict.get("ok"):
         row["match"] = None
         return
@@ -207,10 +219,11 @@ async def run(args: argparse.Namespace) -> int:
 
     client = FireworksClient(api_key=api_key, base_url=base_url)
     sem = asyncio.Semaphore(args.concurrency)
+    effort = None if args.no_effort_suppression else ReasoningEffort()
     rows = await asyncio.gather(
-        *[bench_task(client, sem, t, tiers, config.categories, reference_model, heal=args.self_heal) for t in tasks]
+        *[bench_task(client, sem, t, tiers, config.categories, reference_model, heal=args.self_heal, effort=effort) for t in tasks]
     )
-    await asyncio.gather(*[judge_task(client, sem, judge_model, row, task["prompt"]) for row, task in zip(rows, tasks)])
+    await asyncio.gather(*[judge_task(client, sem, judge_model, row, task["prompt"], effort=effort) for row, task in zip(rows, tasks)])
 
     answers = {row["task_id"]: row["routed"].get("answer", "") for row in rows}
     warnings = deterministic_warnings(tasks, answers)
@@ -281,6 +294,7 @@ def main() -> int:
     parser.add_argument("--judge", default="", help="judge model; defaults to the reference model")
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--self-heal", action="store_true", help="verify answers and repair hard failures (self_heal.py)")
+    parser.add_argument("--no-effort-suppression", action="store_true", help="skip reasoning_effort suppression (measure the old behavior)")
     parser.add_argument("--out", default=str(ROOT / "out" / "benchmark_report.json"))
     args = parser.parse_args()
     return asyncio.run(run(args))

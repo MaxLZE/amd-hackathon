@@ -17,7 +17,7 @@ import time
 from typing import Any
 
 import self_heal
-from fireworks_client import FireworksClient
+from fireworks_client import FireworksClient, ReasoningEffort, create_chat
 from local_engine import LocalEngine
 from router_core import clean_answer, classify, condense_prompt, load_runtime_config, parse_allowed_models, resolve_models
 
@@ -39,9 +39,11 @@ MAX_ATTEMPTS = CONFIG.max_attempts
 
 CATEGORIES = CONFIG.categories
 LOCAL_MODEL_PATH = os.environ.get("LOCAL_MODEL_PATH", "").strip()
+# NER is excluded: judged eval showed Qwen2.5-3B misses entities the judge
+# requires (0/3 local vs 3/3 on the other easy categories, 2026-07-12).
 LOCAL_MODEL_CATEGORIES = {
     c.strip()
-    for c in os.environ.get("LOCAL_MODEL_CATEGORIES", "factual,sentiment,summary,ner").split(",")
+    for c in os.environ.get("LOCAL_MODEL_CATEGORIES", "factual,sentiment,summary").split(",")
     if c.strip()
 }
 # Time kept free for Fireworks fallbacks when deciding whether a local
@@ -50,6 +52,11 @@ FIREWORKS_RESERVE_SECONDS = float(os.environ.get("FIREWORKS_RESERVE_SECONDS", "6
 # Verify answers deterministically and repair hard failures (cheapest-first:
 # local fix -> local model -> one terse API repair). Disable with SELF_HEAL=0.
 SELF_HEAL = os.environ.get("SELF_HEAL", "1").strip().lower() not in {"0", "false", "off"}
+# Hidden reasoning is billed AND overflows tight max_tokens caps into
+# truncated chain-of-thought answers; suppress it, downgrading per model on
+# 400s. Override the starting level with REASONING_EFFORT=low or =off.
+_effort_env = os.environ.get("REASONING_EFFORT", "none").strip().lower()
+EFFORT = None if _effort_env in {"off", "0", "false", ""} else ReasoningEffort(_effort_env if _effort_env in {"none", "low"} else "none")
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +155,9 @@ async def heal_answer(
         return text
     try:
         resp = await asyncio.wait_for(
-            client.chat.completions.create(
+            create_chat(
+                client,
+                EFFORT,
                 model=model,
                 messages=[{"role": "user", "content": repair}],
                 max_tokens=max_tokens,
@@ -232,7 +241,9 @@ async def answer_task(
             use_model = pool.fallback() if (real_attempts == MAX_ATTEMPTS - 1 and pool.fallback() != model) else model
             try:
                 resp = await asyncio.wait_for(
-                    client.chat.completions.create(
+                    create_chat(
+                        client,
+                        EFFORT,
                         model=use_model,
                         messages=[{"role": "user", "content": content}],
                         max_tokens=max_tokens,

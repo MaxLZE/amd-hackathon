@@ -4,10 +4,74 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import urllib.error
 import urllib.request
 from types import SimpleNamespace
 from urllib.parse import urljoin
+
+# Strongest reasoning suppression first. The allowed models bill hidden
+# reasoning tokens on every call (60-100 tokens for a one-sentence answer)
+# and, worse, tight max_tokens caps truncate mid-reasoning so the visible
+# content is chain-of-thought garbage. "none" eliminates it entirely on the
+# GLM/Kimi/DeepSeek pool; gpt-oss rejects "none" but accepts "low"; the final
+# None entry drops the parameter for models that reject it outright.
+REASONING_EFFORT_LADDER: tuple[str | None, ...] = ("none", "low", None)
+
+
+class ReasoningEffort:
+    """Per-model position on REASONING_EFFORT_LADDER, downgraded on 400s."""
+
+    def __init__(self, start: str | None = "none") -> None:
+        self._start = REASONING_EFFORT_LADDER.index(start) if start in REASONING_EFFORT_LADDER else len(REASONING_EFFORT_LADDER) - 1
+        self._idx: dict[str, int] = {}
+
+    def current(self, model: str) -> str | None:
+        return REASONING_EFFORT_LADDER[self._idx.get(model, self._start)]
+
+    def downgrade(self, model: str) -> bool:
+        idx = self._idx.get(model, self._start)
+        if idx + 1 >= len(REASONING_EFFORT_LADDER):
+            return False
+        self._idx[model] = idx + 1
+        print(
+            f"reasoning_effort downgraded to {REASONING_EFFORT_LADDER[idx + 1]!r} for {model}",
+            file=sys.stderr,
+        )
+        return True
+
+
+def _is_bad_request(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        # 404 model_not_found bodies also carry "invalid_request_error", so
+        # the status code is the only trustworthy signal when present.
+        return status == 400
+    text = str(exc).lower()
+    return "invalid_request_error" in text and "model_not_found" not in text and "not found" not in text
+
+
+async def create_chat(client, effort: ReasoningEffort | None, **payload):
+    """chat.completions.create with reasoning suppression and 400 downgrade.
+
+    Works with both FireworksClient and AsyncOpenAI: the effort level rides
+    in extra_body, which AsyncOpenAI merges natively and FireworksClient
+    merges in _create_sync.
+    """
+    while True:
+        level = effort.current(payload["model"]) if effort else None
+        kwargs = dict(payload)
+        if level:
+            kwargs["extra_body"] = {"reasoning_effort": level}
+        try:
+            return await client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            # A 400 with the effort param set is almost certainly the model
+            # rejecting that effort level; downgrading is capped at two steps
+            # per model, after which the original error propagates.
+            if level and effort and _is_bad_request(exc) and effort.downgrade(payload["model"]):
+                continue
+            raise
 
 
 class FireworksHTTPError(RuntimeError):
@@ -36,6 +100,8 @@ class _Completions:
 
     def _create_sync(self, payload: dict):
         url = urljoin(self._client.base_url, "chat/completions")
+        extra = payload.pop("extra_body", None) or {}
+        payload = {**payload, **extra}
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             url,
