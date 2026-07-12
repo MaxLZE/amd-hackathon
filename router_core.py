@@ -14,7 +14,7 @@ from typing import Any
 
 DEFAULT_CATEGORIES: dict[str, dict[str, Any]] = {
     "factual": {
-        "instruction": "Answer in 2-4 sentences.",
+        "instruction": "Answer concisely and accurately in 2-4 sentences.",
         "max_tokens": 220,
         "tier": "easy",
     },
@@ -39,7 +39,7 @@ DEFAULT_CATEGORIES: dict[str, dict[str, Any]] = {
         "tier": "easy",
     },
     "code_debug": {
-        "instruction": "State the bug in one sentence, then give only the corrected code.",
+        "instruction": "If the code has a bug, state it in one or two sentences, then give the corrected code. No extra commentary.",
         "max_tokens": 600,
         "tier": "code",
     },
@@ -49,7 +49,7 @@ DEFAULT_CATEGORIES: dict[str, dict[str, Any]] = {
         "tier": "reason",
     },
     "codegen": {
-        "instruction": "Output only the code with a minimal docstring.",
+        "instruction": "Output only the code with a minimal docstring. No explanation before or after.",
         "max_tokens": 600,
         "tier": "code",
     },

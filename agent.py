@@ -39,13 +39,11 @@ MAX_ATTEMPTS = CONFIG.max_attempts
 
 CATEGORIES = CONFIG.categories
 LOCAL_MODEL_PATH = os.environ.get("LOCAL_MODEL_PATH", "").strip()
-# Judged evals (2026-07-12, vs premium references): NER stays excluded
-# (3B 0/3, 1.5B 2/3); codegen is included for the 1.5B bundle (3/3, and
-# self_heal.exec_check deterministically catches broken code before a bad
-# local answer can reach the judge).
+# NER is excluded: judged eval showed Qwen2.5-3B misses entities the judge
+# requires (0/3 local vs 3/3 on the other easy categories, 2026-07-12).
 LOCAL_MODEL_CATEGORIES = {
     c.strip()
-    for c in os.environ.get("LOCAL_MODEL_CATEGORIES", "factual,sentiment,summary,codegen").split(",")
+    for c in os.environ.get("LOCAL_MODEL_CATEGORIES", "factual,sentiment,summary").split(",")
     if c.strip()
 }
 # Time kept free for Fireworks fallbacks when deciding whether a local
